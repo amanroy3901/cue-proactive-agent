@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+    <application>
+        <activity
+            android:name="com.cue.call.CallActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity="com.cue.call"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar"
+            android:windowSoftInputMode="adjustResize" />
+        <receiver android:name="com.cue.call.CallActionReceiver" android:exported="false" />
+        <service android:name="com.cue.call.CallService" android:exported="false" android:foregroundServiceType="microphone" />
+    </application>
+</manifest>

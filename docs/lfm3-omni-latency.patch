@@ -1,0 +1,102 @@
+diff --git a/samples/litert/photo_voice_chat/kotlin_cpu_gpu/android/app/src/main/java/com/google/ai/edge/examples/photo_voice_chat/AudioIO.kt b/samples/litert/photo_voice_chat/kotlin_cpu_gpu/android/app/src/main/java/com/google/ai/edge/examples/photo_voice_chat/AudioIO.kt
+index 72e55cb..5c7c8f6 100644
+--- a/samples/litert/photo_voice_chat/kotlin_cpu_gpu/android/app/src/main/java/com/google/ai/edge/examples/photo_voice_chat/AudioIO.kt
++++ b/samples/litert/photo_voice_chat/kotlin_cpu_gpu/android/app/src/main/java/com/google/ai/edge/examples/photo_voice_chat/AudioIO.kt
+@@ -43,6 +43,9 @@ class Clip(val name: String, val pcm16k: FloatArray) {
+ class UnusableAudio(message: String) : Exception(message)
+ 
+ object AudioIO {
++  /** Spike: the answer player's start threshold in ms (-1 = AudioTrack's default, the whole 1 s buffer). */
++  @Volatile var answerStartMs: Int = -1
++
+   /** Below this peak (-60 dBFS) a clip counts as silent. */
+   const val SILENT_PEAK = 0.001f
+   const val MIN_SECONDS = 0.5
+@@ -205,6 +208,7 @@ object AudioIO {
+     rate: Int,
+     private val onSound: (Long) -> Unit = {},
+     private val onEnd: (Player) -> Unit = {},
++    startThresholdMs: Int = -1,
+   ) {
+     private val queue = LinkedBlockingQueue<FloatArray>()
+     private val track = AudioTrack.Builder()
+@@ -213,6 +217,11 @@ object AudioIO {
+       .setTransferMode(AudioTrack.MODE_STREAM)
+       .setBufferSizeInBytes(maxOf(AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_FLOAT), rate * 4))
+       .build()
++      .also { t ->
++        if (startThresholdMs >= 0 && android.os.Build.VERSION.SDK_INT >= 31) {
++          t.setStartThresholdInFrames(maxOf(1, rate * startThresholdMs / 1000))
++        }
++      }
+     @Volatile private var stopped = false
+     @Volatile var soundNs = -1L
+       private set
+diff --git a/samples/litert/photo_voice_chat/kotlin_cpu_gpu/android/app/src/main/java/com/google/ai/edge/examples/photo_voice_chat/AutoRun.kt b/samples/litert/photo_voice_chat/kotlin_cpu_gpu/android/app/src/main/java/com/google/ai/edge/examples/photo_voice_chat/AutoRun.kt
+index 38a67b9..4d6ab81 100644
+--- a/samples/litert/photo_voice_chat/kotlin_cpu_gpu/android/app/src/main/java/com/google/ai/edge/examples/photo_voice_chat/AutoRun.kt
++++ b/samples/litert/photo_voice_chat/kotlin_cpu_gpu/android/app/src/main/java/com/google/ai/edge/examples/photo_voice_chat/AutoRun.kt
+@@ -173,9 +173,13 @@ class AutoRun(private val a: MainActivity, planName: String, private val reportN
+           else -> Lfm3OmniEngine.Config().vision
+         }
+         val config = Lfm3OmniEngine.Config(lm = lm, depth = t("depth_threads"), frame = t("frame_threads"),
+-          codec = t("codec_threads"), audio = t("audio_threads"), vision = vision,
++          codec = t("codec_threads"),
++          audio = if (item.has("audio")) Accel.named(item.getString("audio"), item.optInt("audio_threads", 4)) else t("audio_threads"),
++          vision = vision, codecFrames = item.optInt("codec_frames", 12),
+           depthForm = item.optString("depth_form", Lfm3OmniEngine.defaultDepthVariant()),
+           moreDepthForms = item.optString("depth_forms").split(",").map { it.trim() }.filter { it.isNotEmpty() })
++        AudioIO.answerStartMs = item.optInt("start_ms", -1)
++        rec.put("start_ms", AudioIO.answerStartMs)
+         a.reopenEngine(config) { ok -> ui.post { rec.put("engine_reopened", ok).put("config", config.toString()); rec.put("load", a.engineLoad()); done(rec, rest) } }
+       }
+       else -> ui.postDelayed({ done(rec, rest) }, 500)
+diff --git a/samples/litert/photo_voice_chat/kotlin_cpu_gpu/android/app/src/main/java/com/google/ai/edge/examples/photo_voice_chat/Lfm3OmniEngine.kt b/samples/litert/photo_voice_chat/kotlin_cpu_gpu/android/app/src/main/java/com/google/ai/edge/examples/photo_voice_chat/Lfm3OmniEngine.kt
+index f19a3e4..ef943c5 100644
+--- a/samples/litert/photo_voice_chat/kotlin_cpu_gpu/android/app/src/main/java/com/google/ai/edge/examples/photo_voice_chat/Lfm3OmniEngine.kt
++++ b/samples/litert/photo_voice_chat/kotlin_cpu_gpu/android/app/src/main/java/com/google/ai/edge/examples/photo_voice_chat/Lfm3OmniEngine.kt
+@@ -79,6 +79,8 @@ class Lfm3OmniEngine private constructor(
+     val depthForm: String = defaultDepthVariant(),
+     /** More variants to open next to it, for the measuring tool's answers that name one. */
+     val moreDepthForms: List<String> = emptyList(),
++    /** Spike: codec frames per call, 12 (CODEC) or 1 (CODEC_F1). */
++    val codecFrames: Int = 12,
+   )
+ 
+   /** The default variant's depth decoder. */
+@@ -159,6 +161,8 @@ class Lfm3OmniEngine private constructor(
+     }
+     const val FRAME = "LFM3-Omni-2B_frame_embed_f32.tflite"
+     const val CODEC = "LFM3-Omni-2B_codec_decoder_f12_f32.tflite"
++    /** Spike: the 1-frame codec decoder (same streaming state as f12), for earlier first audio. */
++    const val CODEC_F1 = "LFM3-Omni-2B_codec_decoder_f1_f32.tflite"
+     const val SAMPLE_RATE = 24000
+     private val SECTIONS = listOf("decoder", "embedder", "audio", "vision_encoder", "vision_adapter")
+ 
+@@ -368,8 +372,11 @@ class Lfm3OmniEngine private constructor(
+           val b = ByteBuffer.wrap(s.readBytes()).order(ByteOrder.LITTLE_ENDIAN)
+           FloatArray(b.remaining() / 4) { b.getFloat() }
+         }
+-        val codecFile = need(CODEC)
+-        val codec = openWithFallback(load, "codec", config.codec, codecFile, cacheDir) { CodecDecoder(codecFile, it, env, window, overlap = true) }
++        val codecFile = need(if (config.codecFrames == 1) CODEC_F1 else CODEC)
++        load.put("codec_frames", config.codecFrames)
++        val codec = openWithFallback(load, "codec", config.codec, codecFile, cacheDir) {
++          CodecDecoder(codecFile, it, env, window, framesPerCall = config.codecFrames, overlap = true)
++        }
+           .also { opened.add(it) }
+         after("speech decoder")
+ 
+diff --git a/samples/litert/photo_voice_chat/kotlin_cpu_gpu/android/app/src/main/java/com/google/ai/edge/examples/photo_voice_chat/MainActivity.kt b/samples/litert/photo_voice_chat/kotlin_cpu_gpu/android/app/src/main/java/com/google/ai/edge/examples/photo_voice_chat/MainActivity.kt
+index 5743b2d..2e96dfb 100644
+--- a/samples/litert/photo_voice_chat/kotlin_cpu_gpu/android/app/src/main/java/com/google/ai/edge/examples/photo_voice_chat/MainActivity.kt
++++ b/samples/litert/photo_voice_chat/kotlin_cpu_gpu/android/app/src/main/java/com/google/ai/edge/examples/photo_voice_chat/MainActivity.kt
+@@ -1170,7 +1170,7 @@ class MainActivity : Activity() {
+         setPill("● SPEAKING", SPEAKING)
+         views.metrics.text = "First sound %.1f s after the question".format((ns - questionEndNs) / 1e9)
+       }
+-    }, onEnd = { ended.countDown() })
++    }, onEnd = { ended.countDown() }, startThresholdMs = AudioIO.answerStartMs)
+     answerPlayer = p
+     // the answer's speech is not played over the video's sound
+     pauseVideo()
