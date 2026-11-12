@@ -2,6 +2,7 @@ package com.cue.app
 
 import android.content.Intent
 import android.os.Bundle
+import kotlinx.coroutines.launch
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -85,6 +86,10 @@ class MainActivity : ComponentActivity() {
         val s = cue.settings
         onboarded = s.onboarded
         pins = s.pinnedApps
+        // If calls use the on-device model, start loading it now so the next call can use it.
+        if (s.brainPreference == "lfm3" && !cue.lfm3.isReady() && !cue.lfm3.loading) {
+            com.cue.agent.CueRuntime.scope.launch { cue.engine.log("pre-loading LFM3"); val ok = cue.lfm3.prepare(); cue.engine.log(if (ok) "LFM3 ready (${cue.lfm3.lastLoadMs / 1000} s)" else "LFM3 not loaded: ${cue.lfm3.lastError}") }
+        }
         handle(intent)
         setContent { CueTheme { Root() } }
     }

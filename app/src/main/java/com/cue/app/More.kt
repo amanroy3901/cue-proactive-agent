@@ -222,6 +222,30 @@ fun SettingsScreen(a: MainActivity, nav: Nav) {
                 BrainOption("LFM3-Omni-2B on the phone", a.cue.lfm3.status(), brain == "lfm3") { brain = "lfm3"; s.brainPreference = "lfm3"; a.cue.router.applyPreference("lfm3") }
             }
         }
+        item { SectionLabel("Places") }
+        item {
+            val places by a.cue.engine.dao.placesFlow().collectAsState(emptyList())
+            LiftCard(Modifier.fillMaxWidth(), tint = AppTints.people.deep) {
+                Txt("Stand at a place and tap to save it. I'll pop up when you arrive.", Type.small, Cue.muted)
+                places.filter { it.kind in setOf(PlaceKind.HOME, PlaceKind.OFFICE, PlaceKind.GYM, PlaceKind.CLINIC) }.forEach { p ->
+                    SettingRow(p.label, "Set to here") {
+                        @android.annotation.SuppressLint("MissingPermission")
+                        val fused = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(c)
+                        runCatching {
+                            fused.getCurrentLocation(com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, null).addOnSuccessListener { loc ->
+                                if (loc == null) { a.cue.engine.surfaces.toast("Couldn't get your location"); return@addOnSuccessListener }
+                                scope.launch {
+                                    a.cue.engine.dao.upsertPlace(p.copy(lat = loc.latitude, lng = loc.longitude))
+                                    a.cue.engine.scheduler.registerGeofence(p.copy(lat = loc.latitude, lng = loc.longitude))
+                                    a.cue.engine.log("${p.label} set to ${"%.4f".format(loc.latitude)}, ${"%.4f".format(loc.longitude)}")
+                                    a.cue.engine.surfaces.toast("${p.label} saved")
+                                }
+                            }
+                        }.onFailure { a.cue.engine.surfaces.toast("Allow location first") }
+                    }
+                }
+            }
+        }
         item { SectionLabel("Family circle") }
         item {
             LiftCard(Modifier.fillMaxWidth(), tint = AppTints.reminders.deep) {
@@ -288,6 +312,21 @@ fun DebugScreen(a: MainActivity, nav: Nav) {
                 Chip("Drop ticket screenshot") { if (Demo.dropTicketScreenshot(c, engine)) engine.log("sample ticket screenshot saved; watcher will file it") }
                 Chip("Reconcile triggers") { run { engine.log("reconcile: " + engine.planner.reconcile()) } }
                 Chip("Wipe everything") { run { Demo.reset(c); engine.ensureDefaults(); engine.log("all data wiped") } }
+            }
+        }
+        item { SectionLabel("On-device model (LFM3-Omni-2B)") }
+        item {
+            var status by remember { mutableStateOf(a.cue.lfm3.status()) }
+            LaunchedEffect(Unit) { while (true) { status = a.cue.lfm3.status(); kotlinx.coroutines.delay(1000) } }
+            LiftCard(Modifier.fillMaxWidth()) {
+                Txt(status, Type.small, Cue.muted)
+                Spacer(Modifier.height(10.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Chip("Load model now") { run { engine.log("loading LFM3…"); val ok = a.cue.lfm3.prepare(); engine.log(if (ok) "LFM3 loaded in ${a.cue.lfm3.lastLoadMs / 1000} s" else "LFM3 failed: ${a.cue.lfm3.lastError}") } }
+                    Chip("Use it on calls") { a.cue.settings.brainPreference = "lfm3"; a.cue.router.applyPreference("lfm3"); engine.log("calls now use LFM3 when it is loaded") }
+                    Chip("Rules only") { a.cue.settings.brainPreference = "rules"; a.cue.router.applyPreference("rules"); engine.log("calls use the rules brain") }
+                    Chip("Unload model") { run { a.cue.lfm3.release(); engine.log("LFM3 unloaded") } }
+                }
             }
         }
         item { SectionLabel("Ring now") }

@@ -60,6 +60,7 @@ dependencies {
     implementation(libs.lifecycle.runtime)
     implementation(libs.lifecycle.runtime.compose)
     implementation(libs.work.runtime)
+    implementation(libs.play.location)
     implementation(libs.coroutines.android)
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)

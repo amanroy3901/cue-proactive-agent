@@ -205,7 +205,7 @@ class CallActivity : ComponentActivity() {
             val f = engine.startCall(kind, reminderId)
             flow = f
             val opening = f.opening()
-            brainLabel = if (f.usingModel) "on-device model" else if (v.onDevice) "on-device voice" else "phone voice"
+            brainLabel = if (f.usingModel) "LFM3 on device" else if (v.onDevice) "on-device voice" else "phone voice"
             phase = Phase.IN_CALL
             refreshList()
             lines += "cue" to opening
@@ -223,7 +223,7 @@ class CallActivity : ComponentActivity() {
                     heardText = queued
                 } else if (typing) {
                     delay(250); silentSince = System.currentTimeMillis(); continue
-                } else if (f.usingModel) {
+                } else if (f.usingModel && f.hearsAudio) {
                     val audio = pcm.record(onLevel = { level = it })
                     if (audio == null) { heardText = null } else {
                         live = Live.THINKING
@@ -253,7 +253,15 @@ class CallActivity : ComponentActivity() {
                 if (reply == null) {
                     live = Live.THINKING
                     v.cue()
-                    reply = f.userSaid(text)
+                    val player = if (f.usingModel) StreamPlayer() else null
+                    reply = f.userSaid(text, player?.let { p -> { pcm: ShortArray -> if (!p.started) live = Live.SPEAKING; p.push(pcm) } })
+                    if (player != null) {
+                        lines += "cue" to reply.spoken
+                        refreshList()
+                        if (reply.streamed) { live = Live.SPEAKING; player.finish(); live = Live.IDLE } else { player.cancel(); say(reply.spoken, reply.audio) }
+                        if (reply.endCall) { endCall(); break }
+                        continue
+                    }
                 }
                 lines += "cue" to reply.spoken
                 refreshList()
@@ -391,7 +399,7 @@ class CallActivity : ComponentActivity() {
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 14.dp)) {
                 items(lines) { (who, t) -> Bubble(who == "user", t) }
                 if (partial.isNotBlank()) item { Bubble(true, partial, faded = true) }
-                if (entries.isNotEmpty()) item { ListCard() }
+                if (entries.isNotEmpty() && kind != ReminderKind.PRACTICE) item { ListCard() }
             }
             if (typing) TypeBar()
             Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {

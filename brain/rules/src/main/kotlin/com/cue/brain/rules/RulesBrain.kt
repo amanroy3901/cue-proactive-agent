@@ -240,6 +240,17 @@ object Practice {
         "Describe your work in two or three sentences.",
     )
 
+    /** The first common mistake in [text] and its fix, for a model to voice. */
+    fun fix(text: String): Pair<String, String>? {
+        for ((re, template) in fixes) {
+            val m = re.find(text) ?: continue
+            var fix = template
+            m.groupValues.drop(1).forEachIndexed { i, g -> fix = fix.replace("%${i + 1}", g) }
+            return m.value to fix
+        }
+        return null
+    }
+
     fun reply(text: String, turn: Int): Parsed {
         val l = text.lowercase(Locale.ROOT)
         if (Regex("^(bye|stop|that's all|end|enough)\\b").containsMatchIn(l)) return Parsed(emptyList(), "Good practice today. See you tomorrow!", end = true)

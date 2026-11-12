@@ -309,4 +309,52 @@ class PcmIO {
     }
 }
 
+/**
+ * Plays the model's speech as it is generated (24 kHz), so the first word is heard as soon as it exists rather than
+ * after the whole answer. Drops the near-silent lead the model starts with.
+ */
+class StreamPlayer {
+    private val track: AudioTrack = AudioTrack.Builder()
+        .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+        .setAudioFormat(AudioFormat.Builder().setSampleRate(24_000).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
+        .setBufferSizeInBytes(24_000 * 2 * 4).setTransferMode(AudioTrack.MODE_STREAM).build()
+    private val queue = java.util.concurrent.LinkedBlockingQueue<ShortArray>()
+    @Volatile private var closed = false
+    @Volatile var started = false
+        private set
+    private var written = 0L
+    private val thread = Thread {
+        var lead = true
+        while (true) {
+            val chunk = queue.take()
+            if (chunk.isEmpty()) break
+            var c = chunk
+            if (lead) {
+                val i = c.indexOfFirst { kotlin.math.abs(it.toInt()) > 600 }
+                if (i < 0) continue
+                c = c.copyOfRange(i, c.size); lead = false
+            }
+            if (!started) { track.play(); started = true }
+            track.write(c, 0, c.size)
+            written += c.size
+        }
+    }.apply { isDaemon = true; start() }
+
+    fun push(pcm: ShortArray) { if (!closed && pcm.isNotEmpty()) queue.put(pcm) }
+
+    /** Waits until everything pushed has been heard, then frees the track. */
+    suspend fun finish() = withContext(Dispatchers.IO) {
+        closed = true
+        queue.put(ShortArray(0))
+        thread.join()
+        if (started) {
+            while (track.playbackHeadPosition < written && track.playState == AudioTrack.PLAYSTATE_PLAYING) kotlinx.coroutines.delay(50)
+            track.stop()
+        }
+        track.release()
+    }
+
+    fun cancel() { closed = true; queue.clear(); queue.put(ShortArray(0)); runCatching { track.pause(); track.flush() } }
+}
+
 fun isNightKind(kind: String, hour: Int): Boolean = kind == ReminderKind.CHECKIN_NIGHT || (kind == "TALK" && (hour >= 20 || hour < 5))

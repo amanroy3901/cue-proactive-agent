@@ -72,6 +72,15 @@ class CueApp : Application() {
         ScreenshotWatch.start(this)
         CueRuntime.scope.launch { engine.ensureDefaults() }
     }
+
+    override fun onTrimMemory(level: Int) { super.onTrimMemory(level); trim(level) }
+}
+
+/** Hands the 5 GB back when Android asks for memory and no call is live. */
+fun CueApp.trim(level: Int) {
+    if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND && lfm3.isReady() && engine.activeCall == null) {
+        CueRuntime.scope.launch { lfm3.release(); engine.log("released the on-device model (memory pressure)") }
+    }
 }
 
 fun BrainRouter.applyPreference(pref: String) {

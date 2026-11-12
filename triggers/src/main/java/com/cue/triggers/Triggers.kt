@@ -84,7 +84,11 @@ class AndroidScheduler(private val context: Context) : TriggerScheduler {
             .setLoiteringDelay(30_000)
             .build()
         val req = GeofencingRequest.Builder().setInitialTrigger(0).addGeofence(fence).build()
-        runCatching { geofencing.addGeofences(req, geofencePi).addOnFailureListener { Log.w(TAG, "geofence ${place.label} failed: ${it.message}") } }
+        runCatching {
+            geofencing.addGeofences(req, geofencePi)
+                .addOnSuccessListener { Log.i(TAG, "geofence registered: ${place.label} (${place.radiusM.toInt()} m)") }
+                .addOnFailureListener { Log.w(TAG, "geofence ${place.label} failed: ${it.message}") }
+        }
     }
 
     override fun removeGeofence(placeId: Long) {

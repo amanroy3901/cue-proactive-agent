@@ -131,7 +131,7 @@ class CueToolExecutor(
         val albumId = context.albumId ?: env.activeAlbum()?.id
         val clean = text.trim().trimEnd('.').replaceFirstChar { it.uppercase() }
         dao.insertItem(Item(type = ItemType.NOTE, title = clean.take(60), body = clean, albumId = albumId, source = "call", createdAt = now))
-        return ToolResult("note_save", true, "noted")
+        return ToolResult("note_save", true, clean)
     }
 
     private suspend fun reminderSet(text: String, whenPhrase: String, check: Boolean): ToolResult {

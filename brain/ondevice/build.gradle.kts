@@ -25,6 +25,7 @@ kotlin {
 }
 dependencies {
     api(project(":brain:api"))
+    implementation(project(":brain:rules"))
     implementation(libs.core.ktx)
     implementation(libs.coroutines.android)
     implementation(libs.litert)

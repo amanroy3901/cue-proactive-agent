@@ -11,7 +11,7 @@ import com.cue.domain.ReminderStatus
 import org.json.JSONArray
 import org.json.JSONObject
 
-data class CallReply(val spoken: String, val endCall: Boolean, val audio: List<ShortArray> = emptyList(), val heard: String? = null, val acted: Boolean = false)
+data class CallReply(val spoken: String, val endCall: Boolean, val audio: List<ShortArray> = emptyList(), val heard: String? = null, val acted: Boolean = false, val streamed: Boolean = false)
 
 /**
  * One conversation: a ring-first call or a Talk-to-Cue session. The call screen drives it with what the user said;
@@ -39,6 +39,7 @@ class CallFlow internal constructor(
 
     val usingModel: Boolean get() = brain.name != "rules"
     val brainName: String get() = brain.name
+    val hearsAudio: Boolean get() = brain.capabilities.hearsAudio
 
     private fun habitName(kind: String): String? = null
 
@@ -72,17 +73,18 @@ class CallFlow internal constructor(
         if (kind == ReminderKind.PRACTICE) append("This is English speaking practice: keep the conversation going and gently correct one mistake per turn. ")
     }
 
-    suspend fun userSaid(text: String): CallReply = turn(TurnInput.Text(text), text)
+    suspend fun userSaid(text: String, onAudio: ((ShortArray) -> Unit)? = null): CallReply = turn(TurnInput.Text(text), text, onAudio)
 
     suspend fun userAudio(pcm16k: ShortArray): CallReply = turn(TurnInput.Audio(pcm16k), null)
 
-    private suspend fun turn(input: TurnInput, typed: String?): CallReply {
+    private suspend fun turn(input: TurnInput, typed: String?, onAudio: ((ShortArray) -> Unit)? = null): CallReply {
         val s = session ?: return CallReply("Sorry, one second.", false)
         turns++
         val before = executor.changes.size
-        val outcome = loop.run(s, input, feedResults = true)
+        var streamed = false
+        val outcome = loop.run(s, input, feedResults = true, onAudio = onAudio?.let { cb -> { pcm: ShortArray -> streamed = true; cb(pcm) } })
         val heard = typed ?: outcome.heard
-        heard?.let { userLines += it; transcript += "user" to it }
+        heard?.let { if (!outcome.endCall) userLines += it; transcript += "user" to it }
         val acted = executor.changes.size > before
         if (heard != null && !acted && !outcome.endCall) unhandled += heard
         if (kind == ReminderKind.PRACTICE && outcome.spoken.contains("say", ignoreCase = true)) practiceNotes += outcome.spoken
@@ -90,7 +92,7 @@ class CallFlow internal constructor(
         transcript += "cue" to spoken
         persist()
         engine.log("turn[$kind] ${brain.name}: '${heard ?: "(audio)"}' -> '$spoken' tools=${outcome.toolResults.size}")
-        return CallReply(spoken, outcome.endCall, outcome.audio, heard, acted)
+        return CallReply(spoken, outcome.endCall, outcome.audio, heard, acted, streamed)
     }
 
     private suspend fun persist() {

@@ -90,7 +90,7 @@ data class TurnOutcome(
  * the provider can use them. Same for every provider.
  */
 class ToolLoop(private val executor: ToolExecutor, private val maxWritesPerTurn: Int = 5) {
-    suspend fun run(session: BrainSession, input: TurnInput, feedResults: Boolean): TurnOutcome {
+    suspend fun run(session: BrainSession, input: TurnInput, feedResults: Boolean, onAudio: ((ShortArray) -> Unit)? = null): TurnOutcome {
         val text = StringBuilder()
         val audio = mutableListOf<ShortArray>()
         val results = mutableListOf<ToolResult>()
@@ -101,7 +101,7 @@ class ToolLoop(private val executor: ToolExecutor, private val maxWritesPerTurn:
         session.send(input).collect { ev ->
             when (ev) {
                 is BrainEvent.Text -> text.append(ev.delta)
-                is BrainEvent.Audio -> audio += ev.pcm24k
+                is BrainEvent.Audio -> if (onAudio != null) onAudio(ev.pcm24k) else audio += ev.pcm24k
                 is BrainEvent.Heard -> heard = ev.text
                 is BrainEvent.ToolCallRequested -> {
                     calls++
