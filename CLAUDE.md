@@ -31,7 +31,7 @@ Round 3 "Bloom with depth" on the design canvas https://claude.ai/artifact/Q7JAt
 - App source lives in the project root (this folder). Package `com.cue.app`.
 - Kotlin 2.2.21, AGP 8.9.1, Gradle 8.11.1, minSdk 31, compileSdk 36, arm64-v8a only, LiteRT 2.3.0, Room 2.8 with KSP, Jetpack Compose.
 - DI: hand-written service locator `CueGraph` in `:app` (not Koin).
-- Brains: **RulesBrain** (`:brain:fake`, deterministic intent parser + Android SpeechRecognizer/TextToSpeech) is always available and the guaranteed demo path; **Lfm3Brain** (`:brain:ondevice`) runs when model files are in `/sdcard/Android/data/com.cue.app/files/`; `:brain:cloud` is a placeholder. `BrainRouter` picks per job.
+- Brains: **RulesBrain** (`:brain:rules`, deterministic intent parser + Android SpeechRecognizer/TextToSpeech) is always available and the guaranteed demo path; **Lfm3Brain** (`:brain:ondevice`) runs when model files are in `/sdcard/Android/data/com.cue.app/files/`; `:brain:cloud` is a placeholder. `BrainRouter` picks per job.
 - Debug panel with a trigger simulator for every trigger; the demo never depends on real GPS or real time.
 - Demo timeline: flight Sun 14 Dec 6:00 PM, morning call 7:30 AM, night call 10:00 PM.
 
@@ -65,7 +65,7 @@ Round 3 "Bloom with depth" on the design canvas https://claude.ai/artifact/Q7JAt
 - **Model: LiquidAI LFM3-Omni-2B on the phone** (LiteRT 2.3.0 build). One model does speech in, reasoning and speech out. No cloud LLM by default, no credits, everything works in airplane mode.
 - Demo phone: motorola razr fold 2026, Snapdragon SM8845, Android 17.
 
-- **Modular, microservice-style architecture with a swappable model.** Independent Gradle modules with published contracts (`:domain`, `:brain:api`, `:brain:ondevice`, `:brain:cloud`, `:brain:fake`, `:agent`, `:memory`, `:triggers`, `:call`, `:ingest`, `:surfaces`, `:app`). Every model sits behind one brain contract in `:brain:api`, which also owns the tool-call loop, so a cloud provider can replace the on-device model per job without touching other modules. Details and rules: `docs/architecture.md` section 3. When writing code: no module imports another's internals; only `:memory` touches Room; only `:brain:*` providers touch a model; `:agent` never checks which provider is running.
+- **Modular, microservice-style architecture with a swappable model.** Independent Gradle modules with published contracts (`:domain`, `:brain:api`, `:brain:ondevice`, `:brain:cloud`, `:brain:rules`, `:agent`, `:memory`, `:triggers`, `:call`, `:ingest`, `:surfaces`, `:app`). Every model sits behind one brain contract in `:brain:api`, which also owns the tool-call loop, so a cloud provider can replace the on-device model per job without touching other modules. Details and rules: `docs/architecture.md` section 3. When writing code: no module imports another's internals; only `:memory` touches Room; only `:brain:*` providers touch a model; `:agent` never checks which provider is running.
 
 ## Consequences the design is built around
 - The model needs about 5.2 GB of memory and took 48 s to load the first time, so it is loaded 90 s before each call (a pre-load alarm) and unloaded right after. It never stays resident.
@@ -85,4 +85,6 @@ Round 3 "Bloom with depth" on the design canvas https://claude.ai/artifact/Q7JAt
 - Ring mechanism: call-style notification with full-screen intent vs Core-Telecom (risk spike S1).
 
 ## Next step
-Build order is `docs/architecture.md` section 22: every flow on RulesBrain first, tested on the connected razr fold, then Lfm3Brain integration (risk spike S2 checklist in section 21).
+The app is built and every flow runs on the razr fold (as of 2026-11-13). Read `docs/build-status.md` first: how to build, the tested-on-phone matrix, what is not verified and known issues. `docs/architecture.md` revision 5 lists where the build differs from the plan (LFM3 hybrid: phone speech recognizer → rules tools, LFM3 streamed voice for conversation and the journal; debug builds show over the lock screen).
+
+Next: test with real speech and a real arrival, run the overnight ring test (spike S1), skip LFM3's vision encoder on load, then demo prep with a backup recording. Build with `JAVA_HOME` set to the Android Studio JBR; scripts to drive the phone over adb were in the session scratchpad and are not part of the repo.

@@ -1,12 +1,24 @@
 # Cue — Architecture
 
-Nov 13, 2026 · Status: build spec, revision 4 · Companion docs: [prd.md](prd.md), [ux-flows.md](ux-flows.md), [use-cases.md](use-cases.md), [lfm3-omni-spike.md](lfm3-omni-spike.md)
+Nov 13, 2026 · Status: as built, revision 5 · Companion docs: [build-status.md](build-status.md), [prd.md](prd.md), [ux-flows.md](ux-flows.md), [use-cases.md](use-cases.md), [lfm3-omni-spike.md](lfm3-omni-spike.md)
 
 **What changed in revision 2:** the agent's brain is now **LiquidAI LFM3-Omni-2B running on the phone**, not a cloud LLM. One model hears the user, reasons, and answers in speech, with no network. This rewrites sections 2, 3, 6 to 9, 11, 13, 14, 16, 17 and 21, and adjusts the rest. A cloud LLM remains only as an optional helper that is off by default.
 
 **What changed in revision 3:** the app is split into independent modules with published contracts, and every model sits behind one **brain contract** (section 3). If the on-device model does not work out, a cloud provider is switched in behind the same API without touching the rest of the app.
 
 **What changed in revision 4:** the build decisions are fixed (package `com.cue.app`, Room 2.8 with KSP, a hand-written `CueGraph` service locator instead of Koin, compileSdk 36). **RulesBrain**, a deterministic intent parser with Android speech recognition and text-to-speech, is now the always-available brain and the guaranteed demo path; Lfm3Brain is used when its model files are present. The full use-case set from [ux-flows.md](ux-flows.md) is in scope: health, life admin, people memory, accountability calls, arrival moments, care mode (family circle) and English practice, plus the Apps and pinning model. New triggers, tables and tools are added (sections 4, 8, 9), a debug panel can fire every trigger (section 20), and section 25 maps every use case to its components.
+
+**What changed in revision 5 (as built, tested on the razr fold 2026):** the app exists and runs every flow on the phone. Where the build differs from the sections below, this list wins:
+
+| Topic | As built |
+| --- | --- |
+| Modules | As section 3.1, plus `:ui` (the Bloom-with-depth design system shared by `:call`, `:surfaces` and `:app`). The rules provider lives in `:brain:rules`. Entities and the `CueDao` contract are declared in `:domain` with Room's annotations (`room-common`, pure JVM); only `:memory` opens the database |
+| How LFM3 joins a call | Hybrid, chosen after testing. The phone's on-device speech recognizer gives the transcript (needed for filing and tools anyway). Actions go through the rules parser, so ticks, reminders and flight moves stay exact and instant, and are confirmed with Android text-to-speech. Conversation turns (practice, "how was your day", open questions) are answered by LFM3 in its own voice, streamed to the speaker while it is still generating. The night journal is written by LFM3 in text mode. LFM3's raw-audio input path is wired (`PcmIO`, `hearsAudio`) but off, because transcripts are required. If the model is not loaded, every turn falls back to the rules brain |
+| LFM3 measured in Cue | First load 43 s (includes the one-time 3.2 GB section copy); later loads 16 s. Language model on CPU, speech decoder on GPU. First audio 1.3 to 2.0 s after the user's text; whole answers 5 to 14 s, heard while streaming. The model is preloaded when the app opens with calls set to use it, released on memory pressure |
+| Ring | Call-style notification with a full-screen intent and `FLAG_INSISTENT`; verified over the lock screen. 30 s timeout counts as missed: retry in 10 min (15 for medicine), notification after two misses. Default quiet hours 11 PM to 6 AM turn rings into silent notifications; the debug simulator overrides quiet hours |
+| Bubbles on a locked phone | Android never draws overlays over the lock screen, so a locked phone gets a notification now and the bubble on unlock. The debug panel has bubble previews that render the same component in-app |
+| Debug builds | `MainActivity` shows over the lock screen in debug builds only, so the app can be tested on a PIN-locked phone. Release builds do not |
+| Not built | Cloud provider (placeholder only), database encryption, relay server, generated UI |
 
 This document describes how Cue is built for the hackathon: every component, how they connect, where processing runs, and what happens in each situation the phone can be in. Items marked **(spike)** are settled by the risk spike in section 21. Numbers marked **measured** come from the spike on the demo phone ([lfm3-omni-spike.md](lfm3-omni-spike.md)); numbers marked **not measured** are still open.
 
@@ -130,7 +142,7 @@ The app is split into small modules, each with one job, its own data, and a publ
 | `:brain:api` | The brain contract: `Brain`, `BrainSession`, `BrainEvent`, `ToolSpec`, `ToolCall`, `ToolResult`, `BrainCapabilities`, and the shared `ToolLoop` | nothing | No |
 | `:brain:ondevice` | LFM3-Omni-2B provider: `ModelHost` plus the sample's engine (`Lfm3OmniEngine`, `Conversation`, `SpeechGenerator`, `LmRunner`, `Parts`, `Lfm3Tokenizer`), its prompt format and its tool-call parser | `:brain:api` | Yes |
 | `:brain:cloud` | Cloud provider. Built only if needed; an empty placeholder until then | `:brain:api` | Yes |
-| `:brain:fake` | **RulesBrain**: deterministic intent parser used as the always-available provider and in tests. Holds the phrase rules for every tool and the scripted English lesson | `:brain:api` | No |
+| `:brain:rules` | **RulesBrain**: deterministic intent parser used as the always-available provider and in tests. Holds the phrase rules for every tool and the scripted English lesson | `:brain:api` | No |
 | `:agent` | All decision logic: Orchestrator, ContextBuilder, tool definitions and their handlers, prompts, SituationEngine, Planner, AlbumAssigner, pattern rules | `:domain`, `:brain:api` | No |
 | `:memory` | Room database, DAOs, file store. The only module that touches the database | `:domain` | Yes |
 | `:triggers` | Alarms, geofences, screenshot job, share target, boot receiver, trigger simulator. The only module that touches AlarmManager and geofencing | `:domain` | Yes |
@@ -147,7 +159,7 @@ The app is split into small modules, each with one job, its own data, and a publ
       ▼          ▼           ▼           ▼            ▼                      ▼
   :triggers   :memory    :surfaces    :call  ──►   :agent  ◄──  :ingest   :brain:ondevice
       │          │           │           │            │                   :brain:cloud
-      │          │           │           │            │                   :brain:fake
+      │          │           │           │            │                   :brain:rules
       ▼          ▼           ▼           ▼            ▼                      │
   ┌───────────────────────────────────────────┐   ┌──────────────┐           │
   │                 :domain                   │   │  :brain:api  │ ◄─────────┘
@@ -163,7 +175,7 @@ The app is split into small modules, each with one job, its own data, and a publ
 5. **`:agent` knows nothing about which model is running.** It reads `BrainCapabilities` and adapts; it never checks for a provider by name.
 6. **Swapping an implementation is one binding in `:app`.** No other module changes.
 
-`:domain`, `:brain:api`, `:brain:fake` and `:agent` import no Android classes, which also keeps the door open for Kotlin Multiplatform.
+`:domain`, `:brain:api`, `:brain:rules` and `:agent` import no Android classes, which also keeps the door open for Kotlin Multiplatform.
 
 ### 3.3 The brain contract
 
@@ -235,7 +247,7 @@ provider      writes the tools into the prompt in its own format, runs the model
 
 | | RulesBrain (always available) | Lfm3Brain (on-device model) | Cloud text + phone speech | Cloud realtime voice |
 | --- | --- | --- | --- | --- |
-| Module | `:brain:fake` | `:brain:ondevice` | `:brain:cloud` | `:brain:cloud` |
+| Module | `:brain:rules` | `:brain:ondevice` | `:brain:cloud` | `:brain:cloud` |
 | Hears the user | Android `SpeechRecognizer` | The model takes audio | Android speech recognizer | The service takes audio |
 | Understands | Deterministic phrase rules per tool ("pack X and Y", "I've packed X", "remember …", "call me at 6 and check …", "take this twice a day for five days", "my flight moved to 9", "where's my …") | The model, with `<tool_call>` text parsed by the provider | The API's tool calls | The API's tool calls |
 | Speaks | Android `TextToSpeech`, replies from templates | The model produces audio | Android text-to-speech | The service produces audio |
@@ -874,7 +886,7 @@ The whole demo runs in airplane mode.
 
 | Layer | How |
 | --- | --- |
-| `:agent` (situation engine, planner, album assigner, context builder, pattern rules, tool handlers) | Plain unit tests with a fake clock and the `:brain:fake` provider |
+| `:agent` (situation engine, planner, album assigner, context builder, pattern rules, tool handlers) | Plain unit tests with a fake clock and the `:brain:rules` provider |
 | Brain contract | One scripted suite of phrases, expected tool calls and expected fields, run against every provider. A provider must pass it before it can be switched in |
 | Module boundaries | A build check that fails if a module imports another module's internals |
 | Model behaviour | The sample's `AutoRun` measuring tool: a scripted plan of spoken phrases, scored for tool calls, accuracy and timing |
