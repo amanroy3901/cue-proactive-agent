@@ -35,7 +35,8 @@ import org.json.JSONObject
  */
 class Conversation(private val engine: Lfm3OmniEngine) {
 
-  class Question(val clip: Clip?, val typed: String, val label: String)
+  /** Cue: [rows] = the clip already through the audio encoder (one encoding serves the transcript and the answer). */
+  class Question(val clip: Clip?, val typed: String, val label: String, val rows: List<FloatArray>? = null)
 
   class Output(
     val turn: Int,
@@ -202,6 +203,8 @@ class Conversation(private val engine: Lfm3OmniEngine) {
     depthForm: String? = null,
     /** Cue: answer in text only (post-call filing), even in a voice conversation. */
     textOnly: Boolean = false,
+    /** Cue: answer in speech only, opened with `<|audio_start|>` (the model card's TTS form). */
+    speechOnly: Boolean = false,
   ): Output {
     val image = imageRows
     check(image != null || video != null) { "no photo or video" }
@@ -214,7 +217,10 @@ class Conversation(private val engine: Lfm3OmniEngine) {
     val before = counters()
     var audioRows: List<FloatArray>? = null
     var encodeMs = 0.0
-    if (q.clip != null) {
+    if (q.rows != null) {
+      audioRows = q.rows
+      if (audioRows.isEmpty()) throw UnusableAudio("No question was heard: the recording has no sound the model can read.")
+    } else if (q.clip != null) {
       val te = System.nanoTime()
       audioRows = engine.audioEncoder.encode(q.clip.pcm16k)
       encodeMs = (System.nanoTime() - te) / 1e6
@@ -239,8 +245,9 @@ class Conversation(private val engine: Lfm3OmniEngine) {
       promptIds = engine.tokenizer.encode(sb.toString())
       rows = embed(promptIds, listOf(image), audios)
     } else {
-      val text = if (past.isEmpty()) ChatPrompt.ask(nAudio, q.typed, instruction, voice)
-      else ChatPrompt.next(lastToken != Tokens.IM_END, nAudio, q.typed, instruction, voice)
+      val text = (if (past.isEmpty()) ChatPrompt.ask(nAudio, q.typed, instruction, voice && !speechOnly)
+      else ChatPrompt.next(lastToken != Tokens.IM_END, nAudio, q.typed, instruction, voice && !speechOnly)) +
+        (if (speechOnly && voice) "<|audio_start|>" else "")
       promptIds = engine.tokenizer.encode(text)
       val embedded = embed(promptIds, emptyList(), listOfNotNull(audioRows))
       rows = (listOfNotNull(pending) + embedded)
@@ -275,7 +282,7 @@ class Conversation(private val engine: Lfm3OmniEngine) {
     val tg = System.nanoTime()
     val result = try {
       // text only: the model's text answer, the switches to speech never sampled (the vendor's text generation)
-      engine.generator.generate(rows, if (voice) SpeechGenerator.Mode.INTERLEAVED else SpeechGenerator.Mode.TEXT,
+      engine.generator.generate(rows, if (!voice) SpeechGenerator.Mode.TEXT else if (speechOnly) SpeechGenerator.Mode.AUDIO else SpeechGenerator.Mode.INTERLEAVED,
         explicitTextOnly = !voice, maxNewTokens = minOf(maxNewTokens, room), sampling = sampling, rng = Rng(seed),
         replay = replay, listener = gl, stop = stop, continueState = !fromStart, depth = depth)
     } catch (t: Throwable) {

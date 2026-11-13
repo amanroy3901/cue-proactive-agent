@@ -124,6 +124,18 @@ class LmRunner(
   private fun hasInput(name: String, signature: String): Boolean =
     runCatching { decoder.getInputTensorType(name, signature).layout != null }.getOrDefault(false)
 
+  /** Cue: a copy of the state (the cache, the position and the mask row), to come back to after another prompt. */
+  class Snapshot internal constructor(val pos: Int, val cur: Int, val mask: FloatArray, val buffers: Map<String, FloatArray>)
+
+  fun snapshot(): Snapshot = Snapshot(pos, cur, decMaskRow.copyOf(), set(cur).mapValues { (_, b) -> b.readFloat() })
+
+  fun restore(s: Snapshot) {
+    pos = s.pos
+    cur = s.cur
+    System.arraycopy(s.mask, 0, decMaskRow, 0, decMaskRow.size)
+    for ((name, b) in set(cur)) b.writeFloat(s.buffers.getValue(name))
+  }
+
   /** Back to position 0 with a zero state (every set, so the first call of any signature reads zeros). */
   fun reset() {
     pos = 0

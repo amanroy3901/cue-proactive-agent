@@ -66,4 +66,18 @@ class IntentsTest {
         val fix = Practice.fix("yesterday I go to the market")
         assertEquals("yesterday I went", fix?.second)
     }
+
+    @Test fun addInTheList() {
+        assertEquals("a haircut", calls("Well can you add a haircut in the list").single().args["entries"])
+        assertEquals("other card", calls("I want you to add other card").single().args["entries"])
+        assertEquals("milk", calls("please put milk on my shopping list").single().args["entries"])
+    }
+
+    @Test fun dailyCallTime() {
+        val c = calls("can you schedule a call at 11pm every day to remind me and record a journal").single()
+        assertEquals("checkin_time", c.name)
+        assertEquals("at 11pm", c.args["when"])
+        assertEquals("night", c.args["which"])
+        assertEquals("morning", calls("call me every morning at 7").single().args["which"])
+    }
 }

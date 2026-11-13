@@ -51,6 +51,8 @@ sealed interface TurnInput {
     data class Text(val text: String) : TurnInput
     data class Audio(val pcm16k: ShortArray) : TurnInput
     data class ToolResults(val results: List<ToolResult>) : TurnInput
+    /** A line the app wants said as it is (the opening, a nudge): a provider with a voice speaks it, others return it. */
+    data class Say(val text: String) : TurnInput
 }
 
 sealed interface BrainEvent {
@@ -117,7 +119,7 @@ class ToolLoop(private val executor: ToolExecutor, private val maxWritesPerTurn:
             follow.forEach { ev ->
                 when (ev) {
                     is BrainEvent.Text -> text.append(ev.delta)
-                    is BrainEvent.Audio -> audio += ev.pcm24k
+                    is BrainEvent.Audio -> if (onAudio != null) onAudio(ev.pcm24k) else audio += ev.pcm24k
                     is BrainEvent.Done -> end = end || ev.endCall
                     else -> Unit
                 }

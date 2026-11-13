@@ -64,7 +64,9 @@ class CallFlow internal constructor(
         val wanted = engine.router.forJob("converse")
         if (wanted.name == "rules") return wanted
         if (wanted.isReady()) return wanted
-        return engine.router.rules
+        // The model is still loading (the app was just opened): wait for it rather than spend the call on rules.
+        val ready = kotlinx.coroutines.withTimeoutOrNull(30_000) { wanted.prepare() } == true
+        return if (ready) wanted else engine.router.rules
     }
 
     private fun rules(kind: String): String = buildString {
@@ -75,7 +77,15 @@ class CallFlow internal constructor(
 
     suspend fun userSaid(text: String, onAudio: ((ShortArray) -> Unit)? = null): CallReply = turn(TurnInput.Text(text), text, onAudio)
 
-    suspend fun userAudio(pcm16k: ShortArray): CallReply = turn(TurnInput.Audio(pcm16k), null)
+    suspend fun userAudio(pcm16k: ShortArray, onAudio: ((ShortArray) -> Unit)? = null): CallReply = turn(TurnInput.Audio(pcm16k), null, onAudio)
+
+    /** A fixed line (the opening, a nudge) in the brain's own voice when it has one; [CallReply.streamed] tells. */
+    suspend fun say(text: String, onAudio: ((ShortArray) -> Unit)? = null): CallReply {
+        val s = session ?: return CallReply(text, false)
+        var streamed = false
+        val outcome = loop.run(s, TurnInput.Say(text), feedResults = false, onAudio = onAudio?.let { cb -> { pcm: ShortArray -> streamed = true; cb(pcm) } })
+        return CallReply(outcome.spoken.ifBlank { text }, false, outcome.audio, streamed = streamed)
+    }
 
     private suspend fun turn(input: TurnInput, typed: String?, onAudio: ((ShortArray) -> Unit)? = null): CallReply {
         val s = session ?: return CallReply("Sorry, one second.", false)
@@ -83,6 +93,8 @@ class CallFlow internal constructor(
         val before = executor.changes.size
         var streamed = false
         val outcome = loop.run(s, input, feedResults = true, onAudio = onAudio?.let { cb -> { pcm: ShortArray -> streamed = true; cb(pcm) } })
+        // A recording with no words in it is silence, not a turn.
+        if (input is TurnInput.Audio && outcome.heard == null) { turns--; return CallReply("", false) }
         val heard = typed ?: outcome.heard
         heard?.let { if (!outcome.endCall) userLines += it; transcript += "user" to it }
         val acted = executor.changes.size > before

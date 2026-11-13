@@ -56,6 +56,7 @@ class RulesSession(private val mode: String) : BrainSession {
                 emit(BrainEvent.Done(lastIntentEnds || Intents.singleQuestion(mode)))
             }
             is TurnInput.Audio -> emit(BrainEvent.Failed("the rules brain needs text"))
+            is TurnInput.Say -> { emit(BrainEvent.Text(input.text)); emit(BrainEvent.Done(false)) }
         }
     }
 
@@ -133,6 +134,12 @@ object Intents {
             val per = when { perWord == "once" -> "1"; perWord == "twice" -> "2"; perWord == "thrice" -> "3"; else -> perWord.substringBefore(" ") }
             return listOf(call("dose_schedule", "medicine" to m.groupValues[1].trim(), "per_day" to per, "days" to m.groupValues[3].ifBlank { "5" }))
         }
+        // The daily call moved: "schedule a call at 11 pm every day", "call me every morning at 7".
+        Regex("\\b(?:call|ring|check[- ]in)\\b.*?(?:\\b(at\\s+\\d{1,2}(?:[:.]\\d{2})?\\s*(?:am|pm|a\\.m\\.|p\\.m\\.)?)\\s*.*?\\b(every ?day|daily|every night|every morning|each day|each night|every evening)\\b|\\b(every ?day|daily|every night|every morning|each day|each night|every evening)\\b.*?\\b(at\\s+\\d{1,2}(?:[:.]\\d{2})?\\s*(?:am|pm|a\\.m\\.|p\\.m\\.)?))").find(l)?.let { m ->
+            val whenP = (m.groupValues[1].ifBlank { m.groupValues[4] }).replace(".", "")
+            val which = when { Regex("morning").containsMatchIn(l) -> "morning"; Regex("night|evening|journal").containsMatchIn(l) -> "night"; else -> "" }
+            return listOf(call("checkin_time", "which" to which, "when" to whenP))
+        }
         // Accountability and reminders.
         Regex("(?:call|ring|remind)\\s+me\\s+((?:at|in|tomorrow|tonight|by)\\b[^,]*?)\\s+(?:and|to)\\s+(check|make sure|ask)\\s+(?:if |whether |that )?(.+)").find(l)?.let { m ->
             return listOf(call("reminder_set", "text" to "check if ${m.groupValues[3]}", "when" to m.groupValues[1], "check" to "yes"))
@@ -175,7 +182,10 @@ object Intents {
         Regex("(?:remember to\\s+|i need to\\s+|don'?t let me forget to\\s+)?(?:pack|bring|carry|buy|get)\\s+(.+)").find(l)?.takeIf { Regex("^(remember to |i need to |don'?t let me forget to )?(pack|bring|carry|buy|get)\\b").containsMatchIn(l) }?.let { m ->
             return listOf(call("checklist_add", "entries" to m.groupValues[1]))
         }
-        Regex("add\\s+(.+?)\\s+to\\s+(?:my|the)\\s+(?:list|packing list|checklist)").find(l)?.let { m -> return listOf(call("checklist_add", "entries" to m.groupValues[1])) }
+        // "add X to the list", "can you add a haircut in the list", "please put X on my list", "add X"
+        Regex("^(?:well,?\\s+|ok(?:ay)?,?\\s+|so\\s+)?(?:can you\\s+|could you\\s+|please\\s+|i want you to\\s+|i'?d like you to\\s+)?(?:please\\s+)?(?:add|put)\\s+(.+?)(?:\\s+(?:to|in|into|on)\\s+(?:my|the)\\s+(?:\\w+\\s+)?(?:list|checklist))?[.?!]*$")
+            .find(l)?.takeIf { !Regex("^(?:a\\s+)?(?:reminder|note)\\b").containsMatchIn(it.groupValues[1]) }
+            ?.let { m -> return listOf(call("checklist_add", "entries" to m.groupValues[1])) }
         // Notes.
         Regex("^(?:remember|note|keep in mind|save)\\s+(?:that\\s+)?(.+)").find(c)?.let { m -> return listOf(call("note_save", "text" to m.groupValues[1])) }
         Regex("^(?:the\\s+)?(hotel|address|meeting|pnr|booking|wifi|room)\\b.+").find(l)?.let { return listOf(call("note_save", "text" to c)) }
@@ -190,6 +200,7 @@ object Intents {
                 "checklist_tick" -> "Ticked. " + r.message.substringAfter("; ").replaceFirstChar { it.uppercase() } + "."
                 "note_save" -> "Noted."
                 "reminder_set" -> r.message.replaceFirstChar { it.uppercase() } + "."
+                "checkin_time" -> "Done. " + r.message.replaceFirstChar { it.uppercase() } + "."
                 "event_move" -> "Done, I've " + r.message + "."
                 "dose_schedule" -> "Okay: " + r.message + ". If you miss one, I'll call you."
                 "dose_taken" -> if (r.message.contains("taken")) "Great, marked as taken. Talk soon." else "Okay, noted. Please take it when you can."

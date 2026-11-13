@@ -50,7 +50,7 @@ Every row below was run on the device and its log or screenshot checked. "Typed"
 
 ## Not verified, and why
 
-- **Real speech.** I couldn't speak to the phone. The on-device recognizer and text-to-speech start correctly and handle silence; accuracy on Indian-accented English is untested.
+- **Real speech (partly).** Since the Nov 13 morning fix, calls on LFM3 hear the user's own voice. Verified with speech played from the Mac and with Aman talking on live calls: the model transcribed "Can you add a haircut in the list?" and "Call me at 11pm every day." and both actions ran. "Aadhaar card" was heard as "other arcade" / "adha card", so Indian words can be misheard.
 - **A real geofence arrival.** The phone stayed in one place all night. Geofences are registered and the arrival path is tested through the simulator. Home is set to the phone's real location; Office, Gym and Clinic are still placeholders, so set them in Settings → Places.
 - **A bubble on screen over another app.** The phone was locked (PIN), and Android hides overlays under the lock screen. The bubble window is created; unlock the phone after an arrival to see it.
 - **A real WhatsApp message.** The listener is bound; only a simulated message was tested.
@@ -60,8 +60,9 @@ Every row below was run on the device and its log or screenshot checked. "Typed"
 ## Known issues
 
 - LFM3 still loads its vision encoder (about 12 s and 650 MB) though calls never use images.
-- LFM3 answers can run long (up to about 14 s of speech); a per-turn "one short sentence" instruction is in place but the small model doesn't always follow it.
-- Speech replies from rules and LFM3 use two different voices (Android text-to-speech for exact confirmations, LFM3 for conversation).
+- LFM3 answers can run long (up to about 10 s of speech); the system turn asks for one or two short sentences, and the small model doesn't always follow it.
+- A call turn on LFM3 takes about 3 s before the first sound: transcription 0.5–2.8 s, then the answer's first audio 1.0–1.8 s, then the model's own quiet lead-in (up to about 0.8 s).
+- No barge-in: the call listens only after Cue finishes speaking, so the user can't interrupt.
 - Old alarms from wiped test data stay registered until they fire; they find no reminder and do nothing.
 - Album titles use the doctor's name when known ("Dr. Meera Iyer visits") even when the patient is a family member.
 

@@ -40,7 +40,7 @@ import java.util.Locale
 class CueEngine(
     override val dao: CueDao,
     override val clock: Clock,
-    val settings: Settings,
+    override val settings: Settings,
     override val scheduler: TriggerScheduler,
     val surfaces: SurfacePresenter,
     val router: BrainRouter,
@@ -152,7 +152,11 @@ class CueEngine(
             planner.reconcile()
             return@withLock
         }
-        val d = SituationEngine.forRing(device().let { if (force) it.copy(inQuietHours = false, doNotDisturb = false) else it }, if (force) 0 else r.attempts)
+        // The daily calls ring at the time the user chose, even inside Cue's quiet hours (the phone's Do Not Disturb still wins).
+        val chosenTime = r.kind == ReminderKind.CHECKIN_MORNING || r.kind == ReminderKind.CHECKIN_NIGHT
+        val d = SituationEngine.forRing(device().let {
+            if (force) it.copy(inQuietHours = false, doNotDisturb = false) else if (chosenTime) it.copy(inQuietHours = false) else it
+        }, if (force) 0 else r.attempts)
         when (d) {
             Decision.Ring, Decision.RingHeadsUp -> {
                 dao.updateReminder(r.copy(status = ReminderStatus.FIRED))

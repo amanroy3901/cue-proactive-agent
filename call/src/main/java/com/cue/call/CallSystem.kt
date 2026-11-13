@@ -181,9 +181,17 @@ class VoiceIO(private val context: Context) {
             var engine: TextToSpeech? = null
             engine = TextToSpeech(context) { status ->
                 if (status == TextToSpeech.SUCCESS) {
+                    val e = engine!!
                     val india = Locale.forLanguageTag("en-IN")
-                    if (engine!!.isLanguageAvailable(india) >= TextToSpeech.LANG_AVAILABLE) engine!!.language = india else engine!!.language = Locale.US
-                    engine!!.setSpeechRate(1.02f)
+                    if (e.isLanguageAvailable(india) >= TextToSpeech.LANG_AVAILABLE) e.language = india else e.language = Locale.US
+                    // The default voice is often a low-quality one: pick the best installed, offline English voice.
+                    runCatching {
+                        val best = e.voices.orEmpty()
+                            .filter { it.locale.language == "en" && !it.isNetworkConnectionRequired && "notInstalled" !in it.features }
+                            .maxWithOrNull(compareBy<android.speech.tts.Voice>({ it.quality }, { if (it.locale.country == "IN") 2 else if (it.locale.country == "US") 1 else 0 }, { -it.latency }))
+                        if (best != null) { e.voice = best; Log.i(TAG, "tts voice ${best.name} quality ${best.quality}") }
+                    }
+                    e.setSpeechRate(1.0f)
                     ttsReady = true
                 }
                 if (cont.isActive) cont.resume(ttsReady)
@@ -215,37 +223,93 @@ class VoiceIO(private val context: Context) {
 
     fun stopSpeaking() { tts?.stop() }
 
+    /**
+     * Which recognizer and language to listen with. The phone's on-device recognizer only works for languages whose
+     * pack is installed (this razr fold had no English (India) pack, so every listen failed with error 13); a
+     * language error moves to the next setup and the one that works is kept for the rest of the call.
+     */
+    private data class Asr(val onDevice: Boolean, val locale: String)
+    private val setups: List<Asr> = buildList {
+        if (onDevice) { add(Asr(true, "en-IN")); add(Asr(true, "en-US")) }
+        if (SpeechRecognizer.isRecognitionAvailable(context)) { add(Asr(false, "en-IN")); add(Asr(false, "en-US")) }
+    }
+    private var setup = 0
+    private var downloadAsked = false
+    val asrLabel: String get() = setups.getOrNull(setup)?.let { (if (it.onDevice) "on-device " else "") + it.locale } ?: "none"
+
+    private fun recognizerFor(a: Asr): SpeechRecognizer =
+        if (a.onDevice) SpeechRecognizer.createOnDeviceSpeechRecognizer(context) else SpeechRecognizer.createSpeechRecognizer(context)
+
+    /** Asks the system once to fetch the on-device English (India) pack, so later calls can listen offline. */
+    private fun askForPack() {
+        if (downloadAsked || !onDevice || android.os.Build.VERSION.SDK_INT < 33) return
+        downloadAsked = true
+        runCatching {
+            val r = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+            r.triggerModelDownload(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN"))
+            Log.i(TAG, "asked for the on-device en-IN speech pack")
+            r.destroy()
+        }.onFailure { Log.w(TAG, "pack download request failed", it) }
+    }
+
     /** Listens for one utterance. Returns null on silence or error. */
     suspend fun listen(): String? = withContext(Dispatchers.Main) {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return@withContext null
-        if (!SpeechRecognizer.isRecognitionAvailable(context) && !onDevice) return@withContext null
-        val rec = recognizer ?: (if (onDevice) SpeechRecognizer.createOnDeviceSpeechRecognizer(context) else SpeechRecognizer.createSpeechRecognizer(context)).also { recognizer = it }
-        suspendCancellableCoroutine { cont ->
-            rec.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) {}
-                override fun onBeginningOfSpeech() {}
-                override fun onRmsChanged(rmsdB: Float) { onLevel?.invoke(rmsdB) }
-                override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() {}
-                override fun onError(error: Int) { if (cont.isActive) cont.resume(null) }
-                override fun onResults(results: Bundle?) {
-                    val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-                    if (cont.isActive) cont.resume(text?.takeIf { it.isNotBlank() })
-                }
-                override fun onPartialResults(partialResults: Bundle?) {
-                    partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { onPartial?.invoke(it) }
-                }
-                override fun onEvent(eventType: Int, params: Bundle?) {}
-            })
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-                .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN")
-                .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
-                .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1000L)
-            rec.startListening(intent)
-            cont.invokeOnCancellation { runCatching { rec.cancel() } }
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            Log.w(TAG, "asr: no microphone permission"); return@withContext null
         }
+        var busy = 0
+        while (setup < setups.size) {
+            val a = setups[setup]
+            val rec = recognizer ?: recognizerFor(a).also { recognizer = it }
+            val (text, error) = listenOnce(rec, a)
+            if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY && busy++ < 5) {
+                // The previous session is still closing; give it a moment rather than giving up on this setup.
+                runCatching { rec.cancel() }
+                kotlinx.coroutines.delay(300)
+                continue
+            }
+            if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED || error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ||
+                error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED || error == SpeechRecognizer.ERROR_CANNOT_CHECK_SUPPORT) {
+                if (a.onDevice && a.locale == "en-IN") askForPack()
+                runCatching { rec.destroy() }; recognizer = null
+                setup++; busy = 0
+                kotlinx.coroutines.delay(250)
+                Log.w(TAG, "asr: $a failed with $error, trying ${setups.getOrNull(setup)}")
+                continue
+            }
+            return@withContext text
+        }
+        Log.e(TAG, "asr: no recognizer works on this phone")
+        null
+    }
+
+    private suspend fun listenOnce(rec: SpeechRecognizer, a: Asr): Pair<String?, Int?> = suspendCancellableCoroutine { cont ->
+        rec.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) { Log.i(TAG, "asr ready ($a)") }
+            override fun onBeginningOfSpeech() { Log.i(TAG, "asr speech begins") }
+            override fun onRmsChanged(rmsdB: Float) { onLevel?.invoke(rmsdB) }
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+            override fun onError(error: Int) { Log.i(TAG, "asr error $error ($a)"); if (cont.isActive) cont.resume(null to error) }
+            override fun onResults(results: Bundle?) {
+                val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                Log.i(TAG, "asr heard '$text'")
+                if (cont.isActive) cont.resume(text?.takeIf { it.isNotBlank() } to null)
+            }
+            override fun onPartialResults(partialResults: Bundle?) {
+                partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { onPartial?.invoke(it) }
+            }
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+        })
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE, a.locale)
+            .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
+            .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1000L)
+        rec.startListening(intent)
+        cont.invokeOnCancellation { runCatching { rec.cancel() } }
     }
 
     fun cancelListening() { runCatching { recognizer?.cancel() } }
@@ -261,100 +325,110 @@ class VoiceIO(private val context: Context) {
     }
 }
 
-/** Raw audio for the on-device model: 16 kHz mono capture with an energy end-of-speech check, 24 kHz playback. */
+/** Raw audio for the on-device model: 16 kHz mono from the microphone (as the spike app records), cut by an energy check. */
 class PcmIO {
+    /**
+     * Records one utterance: waits up to [waitMs] for speech, then stops after [silenceMs] of quiet (or [maxMs], the
+     * model's 30 s limit). The noise floor is measured first, so a quiet room and a noisy one both work. Returns the
+     * speech with 300 ms either side, or null if nobody spoke. [stop] ends it early (the user switched to typing).
+     */
     @SuppressLint("MissingPermission")
-    suspend fun record(maxMs: Int = 15_000, silenceMs: Int = 900, onLevel: (Float) -> Unit = {}): ShortArray? = withContext(Dispatchers.IO) {
+    suspend fun record(maxMs: Int = 30_000, waitMs: Int = 8_000, silenceMs: Int = 1_000, stop: () -> Boolean = { false }, onLevel: (Float) -> Unit = {}): ShortArray? = withContext(Dispatchers.IO) {
         val rate = 16_000
         val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        val rec = runCatching { AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, min * 4) }.getOrNull() ?: return@withContext null
-        val out = ArrayList<Short>(rate * 8)
-        val buf = ShortArray(rate / 50)
-        var heardSpeech = false
-        var quietMs = 0
+        val rec = runCatching { AudioRecord(MediaRecorder.AudioSource.MIC, rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(min, rate)) }.getOrNull()
+        if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { Log.w(TAG, "mic: could not open"); rec?.release(); return@withContext null }
+        val out = ShortArrayBuilder(rate * 6)
+        val buf = ShortArray(rate / 50) // 20 ms
+        var base = -1.0 // the room's noise level (RMS), followed while nobody speaks
+        var speechStart = -1
+        var lastLoud = -1
         var total = 0
         rec.startRecording()
         try {
-            while (total < maxMs) {
+            while (total < maxMs && !stop()) {
                 val n = rec.read(buf, 0, buf.size)
                 if (n <= 0) break
+                out.add(buf, n)
                 var sum = 0.0
-                for (i in 0 until n) { out += buf[i]; sum += buf[i] * buf[i].toDouble() }
+                for (i in 0 until n) sum += buf[i] * buf[i].toDouble()
                 val rms = kotlin.math.sqrt(sum / n)
-                onLevel((rms / 3000).toFloat().coerceIn(0f, 1f))
-                val ms = n * 1000 / rate
-                total += ms
-                if (rms > 900) { heardSpeech = true; quietMs = 0 } else if (heardSpeech) quietMs += ms
-                if (heardSpeech && quietMs >= silenceMs) break
-                if (!heardSpeech && total > 7_000) break
+                total += n * 1000 / rate
+                base = if (base < 0) rms else base
+                if (total <= 300) { base = base * 0.8 + rms * 0.2; continue }
+                val noise = maxOf(base, 60.0)
+                val loud = rms > maxOf(noise * 3.0, 350.0)
+                onLevel((rms / (noise * 12)).toFloat().coerceIn(0f, 1f))
+                if (loud) { if (speechStart < 0) speechStart = out.size - n; lastLoud = out.size }
+                else if (speechStart < 0) base = base * 0.95 + rms * 0.05
+                if (speechStart >= 0 && (out.size - lastLoud) * 1000 / rate >= silenceMs) break
+                if (speechStart < 0 && total > waitMs) break
             }
-        } finally { rec.stop(); rec.release() }
-        if (!heardSpeech) null else out.toShortArray()
-    }
-
-    suspend fun play(chunks: List<ShortArray>) = withContext(Dispatchers.IO) {
-        val all = chunks.flatMap { it.asList() }
-        if (all.isEmpty()) return@withContext
-        // Skip the model's near-silent lead so the first word comes sooner.
-        val start = all.indexOfFirst { kotlin.math.abs(it.toInt()) > 600 }.coerceAtLeast(0)
-        val pcm = all.subList(start, all.size).toShortArray()
-        val track = AudioTrack.Builder()
-            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
-            .setAudioFormat(AudioFormat.Builder().setSampleRate(24_000).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-            .setBufferSizeInBytes(pcm.size * 2).setTransferMode(AudioTrack.MODE_STATIC).build()
-        track.write(pcm, 0, pcm.size)
-        track.play()
-        kotlinx.coroutines.delay(pcm.size * 1000L / 24_000 + 150)
-        track.release()
+        } finally { runCatching { rec.stop() }; rec.release() }
+        if (speechStart < 0 || stop()) return@withContext null
+        val pad = rate * 3 / 10
+        val from = maxOf(0, speechStart - pad)
+        val to = minOf(out.size, lastLoud + pad)
+        if ((lastLoud - speechStart) < rate / 4) return@withContext null // under 250 ms of sound: a knock, not words
+        Log.i(TAG, "mic: ${(to - from) * 1000 / rate} ms of speech")
+        out.slice(from, to)
     }
 }
 
+private class ShortArrayBuilder(cap: Int) {
+    private var a = ShortArray(cap)
+    var size = 0
+        private set
+    fun add(src: ShortArray, n: Int) {
+        if (size + n > a.size) a = a.copyOf(maxOf(a.size * 2, size + n))
+        System.arraycopy(src, 0, a, size, n); size += n
+    }
+    fun slice(from: Int, to: Int): ShortArray = a.copyOfRange(from, to)
+}
+
 /**
- * Plays the model's speech as it is generated (24 kHz), so the first word is heard as soon as it exists rather than
- * after the whole answer. Drops the near-silent lead the model starts with.
+ * Plays the model's speech (24 kHz) as it is generated, the way the spike app's player does: a one-second buffer
+ * that starts playing once it is full, blocking writes, and nothing cut from the speech. Starting on the first
+ * chunk, as an earlier version did, made the speech stall between chunks.
  */
 class StreamPlayer {
+    private val rate = 24_000
     private val track: AudioTrack = AudioTrack.Builder()
         .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
-        .setAudioFormat(AudioFormat.Builder().setSampleRate(24_000).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-        .setBufferSizeInBytes(24_000 * 2 * 4).setTransferMode(AudioTrack.MODE_STREAM).build()
+        .setAudioFormat(AudioFormat.Builder().setSampleRate(rate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
+        .setBufferSizeInBytes(maxOf(AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT), rate * 2))
+        .setTransferMode(AudioTrack.MODE_STREAM).build()
     private val queue = java.util.concurrent.LinkedBlockingQueue<ShortArray>()
-    @Volatile private var closed = false
+    @Volatile private var stopped = false
     @Volatile var started = false
         private set
-    private var written = 0L
+    @Volatile private var written = 0L
     private val thread = Thread {
-        var lead = true
+        track.play()
         while (true) {
             val chunk = queue.take()
             if (chunk.isEmpty()) break
-            var c = chunk
-            if (lead) {
-                val i = c.indexOfFirst { kotlin.math.abs(it.toInt()) > 600 }
-                if (i < 0) continue
-                c = c.copyOfRange(i, c.size); lead = false
-            }
-            if (!started) { track.play(); started = true }
-            track.write(c, 0, c.size)
-            written += c.size
+            track.write(chunk, 0, chunk.size, AudioTrack.WRITE_BLOCKING)
+            written += chunk.size
         }
-    }.apply { isDaemon = true; start() }
+    }.apply { name = "cue-player"; isDaemon = true; start() }
 
-    fun push(pcm: ShortArray) { if (!closed && pcm.isNotEmpty()) queue.put(pcm) }
+    fun push(pcm: ShortArray) { if (!stopped && pcm.isNotEmpty()) { started = true; queue.put(pcm) } }
 
     /** Waits until everything pushed has been heard, then frees the track. */
     suspend fun finish() = withContext(Dispatchers.IO) {
-        closed = true
         queue.put(ShortArray(0))
         thread.join()
-        if (started) {
-            while (track.playbackHeadPosition < written && track.playState == AudioTrack.PLAYSTATE_PLAYING) kotlinx.coroutines.delay(50)
-            track.stop()
+        if (!stopped && written > 0) {
+            runCatching { track.stop() } // in stream mode, stop() plays out what is buffered
+            val t0 = System.currentTimeMillis()
+            while (track.playbackHeadPosition < written && System.currentTimeMillis() - t0 < written * 1000 / rate + 2_000) kotlinx.coroutines.delay(20)
         }
+        Log.i(TAG, "player: ${written * 1000 / rate} ms of speech, underruns ${runCatching { track.underrunCount }.getOrDefault(-1)}")
         track.release()
     }
 
-    fun cancel() { closed = true; queue.clear(); queue.put(ShortArray(0)); runCatching { track.pause(); track.flush() } }
+    fun cancel() { stopped = true; queue.clear(); queue.put(ShortArray(0)); runCatching { track.pause(); track.flush() } }
 }
 
 fun isNightKind(kind: String, hour: Int): Boolean = kind == ReminderKind.CHECKIN_NIGHT || (kind == "TALK" && (hour >= 20 || hour < 5))

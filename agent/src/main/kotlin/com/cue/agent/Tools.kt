@@ -73,6 +73,7 @@ class CueToolExecutor(
             "checklist_tick" -> checklistTick(a["entry"].orEmpty())
             "note_save" -> noteSave(a["text"].orEmpty())
             "reminder_set" -> reminderSet(a["text"].orEmpty(), a["when"].orEmpty(), a["check"] == "yes")
+            "checkin_time" -> checkinTime(a["which"].orEmpty(), a["when"].orEmpty())
             "event_move" -> eventMove(a["when"].orEmpty())
             "habit_checkin" -> habitCheckin(a["habit"] ?: context.habitName ?: "", a["done"] != "no")
             "dose_schedule" -> doseSchedule(a["medicine"].orEmpty(), TextKit.number(a["per_day"]) ?: 2, TextKit.number(a["days"]) ?: 5)
@@ -123,6 +124,18 @@ class CueToolExecutor(
         dao.updateEntry(match.copy(checked = true))
         val left = dao.openEntries().filter { it.itemId == match.itemId }
         return ToolResult("checklist_tick", true, "ticked ${match.text}; ${left.size} left" + if (left.isNotEmpty()) ": ${left.joinToString { it.text }}" else "")
+    }
+
+    /** Moves the daily morning or night call ("call me at 11 pm every day"). */
+    private suspend fun checkinTime(which: String, whenPhrase: String): ToolResult {
+        val at = TextKit.parseWhen(whenPhrase, env.clock.now(), zone) ?: return ToolResult("checkin_time", false, "I didn't catch the time")
+        val t = java.time.Instant.ofEpochMilli(at).atZone(zone).toLocalTime()
+        val minutes = t.hour * 60 + t.minute
+        val night = when (which) { "morning" -> false; "night" -> true; else -> t.hour >= 15 || t.hour < 4 }
+        if (night) env.settings.nightMinutes = minutes else env.settings.morningMinutes = minutes
+        env.planner.reconcile()
+        val label = TextKit.clock(at, zone)
+        return ToolResult("checkin_time", true, "I'll call you every ${if (night) "night" else "morning"} at $label")
     }
 
     private suspend fun noteSave(text: String): ToolResult {
@@ -254,6 +267,7 @@ class CueToolExecutor(
 /** What the agent needs from the rest of the app. Implemented by the engine. */
 interface AgentEnv {
     val dao: com.cue.domain.CueDao
+    val settings: com.cue.domain.Settings
     val clock: com.cue.domain.Clock
     val scheduler: com.cue.domain.TriggerScheduler
     val planner: Planner

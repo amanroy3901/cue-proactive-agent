@@ -97,6 +97,7 @@ fun summaryLabel(tool: String): Pair<String, Pair<Color, Color>> = when (tool) {
     "checklist_add" -> "Added to your list" to (Color(0xFF2A9A90) to Color(0xFF0D4B48))
     "checklist_tick" -> "Ticked off" to (Color(0xFF2A9A90) to Color(0xFF0D4B48))
     "note_save" -> "Saved a note" to (Color(0xFFFFC861) to Color(0xFFF08A00))
+    "checkin_time" -> "Daily call moved" to (Color(0xFFFFB3CB) to Color(0xFFE2547F))
     "reminder_set" -> "Reminder set" to (Color(0xFFFFB3CB) to Color(0xFFE2547F))
     "event_move" -> "Flight moved" to (Color(0xFFB9C6FF) to Color(0xFF6C7FE8))
     "habit_checkin" -> "Habit logged" to (Color(0xFFFFC861) to Color(0xFFF08A00))
@@ -209,71 +210,66 @@ class CallActivity : ComponentActivity() {
             phase = Phase.IN_CALL
             refreshList()
             lines += "cue" to opening
-            say(opening, emptyList())
+            speak(opening)
             var silentSince = System.currentTimeMillis()
             var nudged = false
             while (phase == Phase.IN_CALL) {
-                val heardText: String?
-                var reply: com.cue.agent.CallReply? = null
                 live = Live.LISTENING
                 partial = ""
                 val queued = typedQueue.also { typedQueue = null }
                 val listenStart = System.currentTimeMillis()
-                if (queued != null) {
-                    heardText = queued
-                } else if (typing) {
-                    delay(250); silentSince = System.currentTimeMillis(); continue
-                } else if (f.usingModel && f.hearsAudio) {
-                    val audio = pcm.record(onLevel = { level = it })
-                    if (audio == null) { heardText = null } else {
-                        live = Live.THINKING
-                        v.cue()
-                        reply = f.userAudio(audio)
-                        heardText = reply.heard ?: "(spoken)"
-                    }
-                } else {
-                    heardText = v.listen()
-                }
+                var heardText: String? = null
+                var audio: ShortArray? = null
+                if (queued != null) heardText = queued
+                else if (typing) { delay(250); silentSince = System.currentTimeMillis(); continue }
+                else if (f.usingModel && f.hearsAudio) {
+                    // The model hears the user's own voice (the model card's spoken-question form).
+                    audio = pcm.record(stop = { typing || typedQueue != null || phase != Phase.IN_CALL }, onLevel = { level = it })
+                } else heardText = v.listen()
                 if (phase != Phase.IN_CALL) break
-                val typedNow = typedQueue
-                if (heardText == null && typedNow == null) {
-                    if (typing) continue
+                if (heardText == null && audio == null) {
+                    if (typedQueue != null || typing) continue
                     // A recognizer error that comes back instantly is not silence; wait a moment and listen again.
                     if (System.currentTimeMillis() - listenStart < 1500) { delay(600); continue }
                     val quiet = System.currentTimeMillis() - silentSince
-                    if (quiet > 22_000 && nudged) { say("I'll let you go. Talk soon.", emptyList()); endCall(); break }
-                    if (quiet > 8_000 && !nudged) { nudged = true; say("Are you there?", emptyList()) }
+                    if (quiet > 22_000 && nudged) { speak("I'll let you go. Talk soon."); endCall(); break }
+                    if (quiet > 7_000 && !nudged) { nudged = true; speak("Are you there?") }
                     continue
+                }
+                live = Live.THINKING
+                v.cue()
+                if (heardText != null) { lines += "user" to heardText; partial = "" } else partial = "…"
+                val player = if (f.usingModel) StreamPlayer() else null
+                val onAudio = player?.let { p -> { chunk: ShortArray -> live = Live.SPEAKING; p.push(chunk) } }
+                val reply = if (audio != null) f.userAudio(audio, onAudio) else f.userSaid(heardText!!, onAudio)
+                partial = ""
+                if (audio != null) {
+                    val heard = reply.heard
+                    if (heard == null) { player?.cancel(); continue } // a sound with no words in it: keep listening
+                    lines += "user" to heard
                 }
                 silentSince = System.currentTimeMillis()
                 nudged = false
-                val text = heardText ?: typedNow!!.also { typedQueue = null }
-                lines += "user" to text
-                partial = ""
-                if (reply == null) {
-                    live = Live.THINKING
-                    v.cue()
-                    val player = if (f.usingModel) StreamPlayer() else null
-                    reply = f.userSaid(text, player?.let { p -> { pcm: ShortArray -> if (!p.started) live = Live.SPEAKING; p.push(pcm) } })
-                    if (player != null) {
-                        lines += "cue" to reply.spoken
-                        refreshList()
-                        if (reply.streamed) { live = Live.SPEAKING; player.finish(); live = Live.IDLE } else { player.cancel(); say(reply.spoken, reply.audio) }
-                        if (reply.endCall) { endCall(); break }
-                        continue
-                    }
-                }
                 lines += "cue" to reply.spoken
                 refreshList()
-                say(reply.spoken, reply.audio)
+                live = Live.SPEAKING
+                if (player != null && reply.streamed) player.finish()
+                else { player?.cancel(); voice?.speak(reply.spoken) }
+                live = Live.IDLE
                 if (reply.endCall) { endCall(); break }
             }
         }
     }
 
-    private suspend fun say(text: String, audio: List<ShortArray>) {
+    /** Says a fixed line: in the model's own voice when it is on the call, else with the phone's voice. */
+    private suspend fun speak(text: String) {
         live = Live.SPEAKING
-        if (audio.isNotEmpty()) pcm.play(audio) else voice?.speak(text)
+        val f = flow
+        if (f != null && f.usingModel) {
+            val player = StreamPlayer()
+            val r = f.say(text) { player.push(it) }
+            if (r.streamed) player.finish() else { player.cancel(); voice?.speak(text) }
+        } else voice?.speak(text)
         live = Live.IDLE
     }
 
@@ -294,10 +290,13 @@ class CallActivity : ComponentActivity() {
         phase = Phase.ENDED
         voice?.cancelListening()
         voice?.stopSpeaking()
-        lifecycleScope.launch {
-            val c = flow?.end().orEmpty()
-            changes.clear(); changes += c
-            CallService.stop(this@CallActivity)
+        // Filing runs on the app's scope: leaving the summary screen early must not cancel it.
+        val f = flow
+        val app = applicationContext
+        CueRuntime.scope.launch {
+            val c = f?.end().orEmpty()
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { changes.clear(); changes += c }
+            CallService.stop(app)
         }
     }
 
