@@ -108,7 +108,7 @@ fun PermissionList(compact: Boolean = false) {
                 val ok = permGranted(c, p.key)
                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).clickable(enabled = !ok, role = Role.Button) { request(p.key) }.padding(horizontal = 12.dp, vertical = if (compact) 10.dp else 12.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(28.dp).clip(CircleShape).background(if (ok) Cue.tealBrush else Brush.linearGradient(listOf(Cue.coralTint, Cue.coralTint))), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(28.dp).clip(CircleShape).background(if (ok) Cue.primaryBrush else Brush.linearGradient(listOf(Cue.coralTint, Cue.coralTint))), contentAlignment = Alignment.Center) {
                         Icon(if (ok) Icons.Rounded.Check else Icons.Rounded.PriorityHigh, null, tint = if (ok) Color.White else Cue.coralText, modifier = Modifier.size(16.dp))
                     }
                     Spacer(Modifier.width(12.dp))
@@ -116,7 +116,7 @@ fun PermissionList(compact: Boolean = false) {
                         Txt(p.title, Type.bodyStrong)
                         Txt(if (ok) p.why else "${p.why}. Without it: ${p.fallback.lowercase()}.", Type.small, Cue.muted, maxLines = 2)
                     }
-                    if (!ok) Txt("Allow", Type.smallStrong, Cue.tealDeep)
+                    if (!ok) Txt("Allow", Type.smallStrong, Cue.primaryDeep)
                 }
             }
         }
@@ -134,21 +134,21 @@ fun Onboarding(a: MainActivity, done: () -> Unit) {
     var name by remember { mutableStateOf(s.userName) }
     val scope = rememberCoroutineScope()
     val c = LocalContext.current
-    GlowBackground(Color(0xFFFFD9C4), Color(0xFFD3F1E8)) {
+    GlowBackground(Cue.glowBlush, Cue.glowLavender) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                repeat(3) { i -> Box(Modifier.width(22.dp).height(6.dp).clip(CircleShape).background(if (i <= step) Cue.tealDeep else Color(0xFFDCD5CA))) }
+                repeat(3) { i -> Box(Modifier.width(22.dp).height(6.dp).clip(CircleShape).background(if (i <= step) Cue.primaryDeep else Color(0xFFDDD6F0))) }
                 Spacer(Modifier.width(6.dp)); Txt("Step ${step + 1} of 3", Type.smallStrong, Cue.muted)
             }
             when (step) {
                 0 -> {
                     Spacer(Modifier.height(20.dp))
-                    CueOrb(96.dp, "Cue", ring = true)
+                    com.cue.ui.Pixel(com.cue.ui.PixelMood.Hello, 150.dp)
                     Txt("I remember your life and show up on my own.", Type.display)
                     Txt("I ring you like a call at the right moment, or pop up when you arrive somewhere. Everything stays on this phone.", Type.body, Cue.muted)
                     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Color.White).padding(horizontal = 16.dp, vertical = 6.dp)) {
                         Txt("What should I call you?", Type.small, Cue.muted)
-                        BasicTextField(name, { name = it }, Modifier.fillMaxWidth().padding(vertical = 8.dp), textStyle = Type.title.copy(color = Cue.ink), singleLine = true, cursorBrush = SolidColor(Cue.tealDeep))
+                        BasicTextField(name, { name = it }, Modifier.fillMaxWidth().padding(vertical = 8.dp), textStyle = Type.title.copy(color = Cue.ink), singleLine = true, cursorBrush = SolidColor(Cue.primaryDeep))
                     }
                     Spacer(Modifier.weight(1f))
                     PrimaryButton("Let's set up", Modifier.fillMaxWidth()) { s.userName = name.ifBlank { "there" }; step = 1 }
@@ -156,10 +156,10 @@ fun Onboarding(a: MainActivity, done: () -> Unit) {
                 1 -> {
                     Txt("When should I ring you?", Type.display)
                     Txt("Two short calls a day, about a minute each. I always ring first, and only talk once you pick up.", Type.body, Cue.muted)
-                    TimeCard("Morning check-in", "Your plan and your list", morning, Brush.linearGradient(listOf(Color(0xFFFFE3C8), Color(0xFFFFB48E), Color(0xFFFF8E6B))), Color(0xFF3A1A14), Cue.coralDeep) {
+                    TimeCard("Morning check-in", "Your plan and your list", morning, Brush.linearGradient(listOf(Color(0xFFFFE3EE), Color(0xFFFFB3C9), Color(0xFFFF9AA8))), Color(0xFF3B1630), Cue.pink) {
                         TimePickerDialog(c, { _, h, m -> morning = h * 60 + m }, morning / 60, morning % 60, false).show()
                     }
-                    TimeCard("Night check-in", "You talk, I file it", night, Cue.tealBrush, Color.White, Cue.tealNight) {
+                    TimeCard("Night check-in", "You talk, I file it", night, Cue.primaryBrush, Color.White, Cue.primaryNight) {
                         TimePickerDialog(c, { _, h, m -> night = h * 60 + m }, night / 60, night % 60, false).show()
                     }
                     Spacer(Modifier.weight(1f))
@@ -204,7 +204,7 @@ fun SettingsScreen(a: MainActivity, nav: Nav) {
     var cgNumber by remember { mutableStateOf(s.caregiverNumber) }
     var brain by remember { mutableStateOf(s.brainPreference) }
     fun replan() { scope.launch { a.cue.engine.planner.reconcile() } }
-    Page(glowA = Color(0xFFD3F1E8)) {
+    Page(glowA = Cue.glowLavender) {
         item { BackHeader("Settings", null, { nav.back() }) }
         item { SectionLabel("Calls") }
         item {
@@ -289,22 +289,22 @@ fun SettingsScreen(a: MainActivity, nav: Nav) {
 
 @Composable fun SettingRow(title: String, value: String, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick).padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Txt(title, Type.body, modifier = Modifier.weight(1f)); Txt(value, Type.bodyStrong, Cue.tealDeep)
+        Txt(title, Type.body, modifier = Modifier.weight(1f)); Txt(value, Type.bodyStrong, Cue.primaryDeep)
     }
 }
 
 @Composable fun BrainOption(title: String, sub: String, selected: Boolean, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(if (selected) Cue.tealTint else Color.Transparent).clickable(onClick = onClick).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(20.dp).clip(CircleShape).background(if (selected) Cue.tealDeep else Color(0xFFDCD5CA)))
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(if (selected) Cue.primaryTint else Color.Transparent).clickable(onClick = onClick).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(20.dp).clip(CircleShape).background(if (selected) Cue.primaryDeep else Color(0xFFDDD6F0)))
         Spacer(Modifier.width(12.dp))
         Column { Txt(title, Type.bodyStrong); Txt(sub, Type.small, Cue.muted, maxLines = 3) }
     }
 }
 
 @Composable fun InlineField(label: String, value: String, onChange: (String) -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFFF7F3EC)).padding(horizontal = 12.dp, vertical = 8.dp)) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(14.dp)).background(Cue.base).padding(horizontal = 12.dp, vertical = 8.dp)) {
         Txt(label, Type.tiny, Cue.muted)
-        BasicTextField(value, onChange, Modifier.fillMaxWidth().padding(vertical = 4.dp), textStyle = Type.body.copy(color = Cue.ink), singleLine = true, cursorBrush = SolidColor(Cue.tealDeep))
+        BasicTextField(value, onChange, Modifier.fillMaxWidth().padding(vertical = 4.dp), textStyle = Type.body.copy(color = Cue.ink), singleLine = true, cursorBrush = SolidColor(Cue.primaryDeep))
     }
 }
 
@@ -388,6 +388,6 @@ fun DebugScreen(a: MainActivity, nav: Nav) {
 
 @Composable fun Chip(text: String, onClick: () -> Unit) {
     Box(Modifier.height(40.dp).clip(CircleShape).background(Color.White).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
-        Txt(text, Type.smallStrong, Cue.tealDeep)
+        Txt(text, Type.smallStrong, Cue.primaryDeep)
     }
 }

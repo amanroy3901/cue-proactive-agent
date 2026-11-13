@@ -127,7 +127,7 @@ class MainActivity : ComponentActivity() {
                 CueBottomBar(entries.take(split), entries.drop(split), selected, onSelect = { nav.tab(it) }, onTalk = { talk() }, modifier = Modifier.align(Alignment.BottomCenter))
             }
             bubblePreview?.let { spec ->
-                Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color(0xAA4A5260)).clickable { bubblePreview = null }, contentAlignment = Alignment.BottomCenter) {
+                Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color(0xAA2A2445)).clickable { bubblePreview = null }, contentAlignment = Alignment.BottomCenter) {
                     Box(Modifier.navigationBarsPadding()) {
                         com.cue.surfaces.BubbleCard(spec, true, onToggle = {}, onDismiss = { bubblePreview = null }, onOpen = { bubblePreview = null; spec.albumId?.let { nav.go("album/$it") } })
                     }

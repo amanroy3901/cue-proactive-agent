@@ -80,7 +80,7 @@ private fun CardShell(title: String, icon: ImageVector, tint: AppTint, dark: Boo
         Modifier.fillMaxWidth().padding(top = 2.dp)
             .shadow(14.dp, RoundedCornerShape(28.dp), spotColor = tint.deep.copy(alpha = 0.35f))
             .clip(RoundedCornerShape(28.dp))
-            .background(if (dark) Color(0xFF142626) else Color.White)
+            .background(if (dark) Cue.nightRaised else Color.White)
             .padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -146,7 +146,7 @@ private fun HabitsCard(version: Int, dark: Boolean) {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     r.week.forEach { done ->
                         Box(Modifier.size(14.dp).clip(CircleShape).background(
-                            if (done) AppTints.habits.deep else if (dark) Color.White.copy(alpha = 0.12f) else Color(0xFFF1ECE4)))
+                            if (done) AppTints.habits.deep else if (dark) Color.White.copy(alpha = 0.12f) else Color(0xFFF0ECF8)))
                     }
                 }
             }
