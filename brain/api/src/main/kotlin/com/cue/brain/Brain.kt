@@ -44,6 +44,8 @@ data class SessionConfig(
 interface BrainSession {
     /** One user turn. Emits text, optional audio, tool calls and a done event. */
     fun send(input: TurnInput): Flow<BrainEvent>
+    /** The user started talking over the answer: stop generating it as soon as possible (barge-in). */
+    fun interrupt() {}
     fun close()
 }
 

@@ -388,47 +388,193 @@ private class ShortArrayBuilder(cap: Int) {
 
 /**
  * Plays the model's speech (24 kHz) as it is generated, the way the spike app's player does: a one-second buffer
- * that starts playing once it is full, blocking writes, and nothing cut from the speech. Starting on the first
- * chunk, as an earlier version did, made the speech stall between chunks.
+ * that starts playing once it is full, and nothing cut from the speech. Starting on the first chunk, as an earlier
+ * version did, made the speech stall between chunks. It also keeps how loud each 10 ms of the speech is, so the
+ * barge-in detector can tell Cue's own voice coming back into the microphone from the user talking over it.
  */
 class StreamPlayer {
     private val rate = 24_000
+    private val block = rate / 100 // 10 ms
     private val track: AudioTrack = AudioTrack.Builder()
         .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
         .setAudioFormat(AudioFormat.Builder().setSampleRate(rate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
         .setBufferSizeInBytes(maxOf(AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT), rate * 2))
         .setTransferMode(AudioTrack.MODE_STREAM).build()
     private val queue = java.util.concurrent.LinkedBlockingQueue<ShortArray>()
-    @Volatile private var stopped = false
+    @Volatile var stopped = false
+        private set
     @Volatile var started = false
         private set
     @Volatile private var written = 0L
+    /** RMS of each 10 ms block pushed so far, in order. */
+    private var env = FloatArray(1024)
+    @Volatile private var envSize = 0
+    private var partSum = 0.0
+    private var partN = 0
     private val thread = Thread {
         track.play()
         while (true) {
             val chunk = queue.take()
-            if (chunk.isEmpty()) break
-            track.write(chunk, 0, chunk.size, AudioTrack.WRITE_BLOCKING)
-            written += chunk.size
+            if (chunk.isEmpty() || stopped) break
+            var off = 0
+            // Non-blocking writes, so a stop never leaves this thread stuck on a paused track.
+            while (off < chunk.size && !stopped) {
+                val n = track.write(chunk, off, chunk.size - off, AudioTrack.WRITE_NON_BLOCKING)
+                if (n < 0) break
+                off += n
+                written += n
+                if (off < chunk.size) Thread.sleep(10)
+            }
         }
     }.apply { name = "cue-player"; isDaemon = true; start() }
 
-    fun push(pcm: ShortArray) { if (!stopped && pcm.isNotEmpty()) { started = true; queue.put(pcm) } }
+    fun push(pcm: ShortArray) {
+        if (stopped || pcm.isEmpty()) return
+        started = true
+        synchronized(this) {
+            for (v in pcm) {
+                partSum += v * v.toDouble(); partN++
+                if (partN == block) {
+                    if (envSize == env.size) env = env.copyOf(env.size * 2)
+                    env[envSize] = kotlin.math.sqrt(partSum / partN).toFloat()
+                    envSize++
+                    partSum = 0.0; partN = 0
+                }
+            }
+        }
+        queue.put(pcm)
+    }
 
-    /** Waits until everything pushed has been heard, then frees the track. */
+    @Volatile private var released = false
+    private val head: Int get() = if (released) 0 else runCatching { track.playbackHeadPosition }.getOrDefault(0)
+
+    /** Whether speech is coming out of the speaker now. */
+    val audible: Boolean get() = !stopped && !released && started && head in 1 until written
+
+    /** How loud Cue is at the speaker now (RMS, 16-bit scale): the loudest 10 ms around the playback head. */
+    fun level(): Float {
+        if (!audible) return 0f
+        val i = head / block
+        synchronized(this) {
+            var m = 0f
+            for (j in maxOf(0, i - 15)..minOf(envSize - 1, i + 5)) m = maxOf(m, env[j])
+            return m
+        }
+    }
+
+    /** Waits until everything pushed has been heard (or the player is stopped), then frees the track. */
     suspend fun finish() = withContext(Dispatchers.IO) {
         queue.put(ShortArray(0))
         thread.join()
         if (!stopped && written > 0) {
-            runCatching { track.stop() } // in stream mode, stop() plays out what is buffered
+            // A short line may not fill the one-second start buffer: start playing whatever is there.
+            runCatching { track.setStartThresholdInFrames(1) }
             val t0 = System.currentTimeMillis()
-            while (track.playbackHeadPosition < written && System.currentTimeMillis() - t0 < written * 1000 / rate + 2_000) kotlinx.coroutines.delay(20)
+            while (!stopped && head < written && System.currentTimeMillis() - t0 < written * 1000 / rate + 1_500) kotlinx.coroutines.delay(20)
+            Log.i(TAG, "player: played out ${System.currentTimeMillis() - t0} ms after the last chunk")
         }
-        Log.i(TAG, "player: ${written * 1000 / rate} ms of speech, underruns ${runCatching { track.underrunCount }.getOrDefault(-1)}")
-        track.release()
+        Log.i(TAG, "player: ${written * 1000 / rate} ms of speech${if (stopped) " (stopped)" else ""}, underruns ${runCatching { track.underrunCount }.getOrDefault(-1)}")
+        released = true
+        runCatching { track.stop() }
+        runCatching { track.release() }
     }
 
-    fun cancel() { stopped = true; queue.clear(); queue.put(ShortArray(0)); runCatching { track.pause(); track.flush() } }
+    /** Stops the speech now (the user talked over it). */
+    fun cancel() {
+        stopped = true
+        queue.clear(); queue.put(ShortArray(0))
+        runCatching { track.pause(); track.flush() }
+    }
+}
+
+/**
+ * Barge-in: listens while Cue speaks and reports when the user talks over it, then records what they say.
+ *
+ * The microphone also hears Cue's own voice from the speaker. The capture uses the voice-call input with the phone's
+ * echo canceller where it has one, and on top of that the detector knows how loud Cue is at each moment
+ * ([StreamPlayer.level]) and learns how much of it leaks back into the microphone. The user is talking over Cue only
+ * when the microphone is clearly louder than that leak for a quarter of a second.
+ */
+class BargeIn(private val player: StreamPlayer) {
+    private val rate = 16_000
+    @Volatile var triggered = false
+        private set
+    @Volatile private var closed = false
+    private val result = kotlinx.coroutines.CompletableDeferred<ShortArray?>()
+    var onTrigger: (() -> Unit)? = null
+
+    @SuppressLint("MissingPermission")
+    private val thread = Thread {
+        val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        val rec = runCatching { AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(min, rate)) }.getOrNull()
+        if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { rec?.release(); result.complete(null); return@Thread }
+        val aec = runCatching { if (android.media.audiofx.AcousticEchoCanceler.isAvailable()) android.media.audiofx.AcousticEchoCanceler.create(rec.audioSessionId)?.apply { enabled = true } else null }.getOrNull()
+        val buf = ShortArray(rate / 50) // 20 ms
+        val keep = ShortArrayBuilder(rate * 4)
+        // Microphone level per unit of Cue's level: the upper end of the leak, learned while Cue talks and the user
+        // doesn't. Starts cautious (on the razr fold the leak measured 0.15-0.2 with the echo canceller on).
+        var coupling = 0.3
+        var noise = -1.0
+        var run = 0
+        var gap = 0
+        var speechStart = -1
+        var lastLoud = -1
+        var frames = 0
+        var statM = 0.0; var statR = 0.0; var statN = 0
+        rec.startRecording()
+        try {
+            while (!closed) {
+                val n = rec.read(buf, 0, buf.size)
+                if (n <= 0) break
+                keep.add(buf, n)
+                var sum = 0.0
+                for (i in 0 until n) sum += buf[i] * buf[i].toDouble()
+                val m = kotlin.math.sqrt(sum / n)
+                frames++
+                if (triggered) {
+                    // Recording what the user is saying until they pause.
+                    val quiet = m < maxOf(noise * 3, 300.0)
+                    if (!quiet) lastLoud = keep.size
+                    if ((keep.size - lastLoud) * 1000 / rate >= 1_000 || keep.size - speechStart > rate * 30) break
+                    continue
+                }
+                val r = player.level().toDouble()
+                if (noise < 0) noise = m
+                if (r < 50) { if (run == 0) noise = noise * 0.95 + m * 0.05 }
+                else if (run == 0 && r > 300) {
+                    // Rises fast and falls slowly, so it follows the loud end of the leak, not its average; a jump of
+                    // more than 3x is more likely the user than the leak, so it only counts as 3x.
+                    val ratio = minOf(m / r, coupling * 3)
+                    coupling = if (ratio > coupling) coupling + 0.08 * (ratio - coupling) else coupling - 0.005 * (coupling - ratio)
+                    coupling = coupling.coerceIn(0.05, 1.5)
+                }
+                val expected = coupling * r + maxOf(noise, 40.0)
+                val loud = m > maxOf(expected * 2.0, maxOf(noise, 40.0) * 4, 450.0)
+                statM += m; statR += r; statN++
+                if (frames % 50 == 0) { Log.i(TAG, "barge: mic %.0f, cue %.0f, leak %.3f, noise %.0f".format(statM / statN, statR / statN, coupling, noise)); statM = 0.0; statR = 0.0; statN = 0 }
+                if (loud) { if (run == 0) speechStart = keep.size - n; run++; gap = 0; lastLoud = keep.size }
+                else if (run > 0 && ++gap > 2) { run = 0; gap = 0 }
+                if (run >= 12 && player.started) {
+                    triggered = true
+                    Log.i(TAG, "barge: the user is talking over Cue (mic %.0f, cue %.0f, leak %.3f)".format(m, r, coupling))
+                    onTrigger?.invoke()
+                }
+            }
+        } finally {
+            runCatching { rec.stop() }; rec.release(); aec?.release()
+        }
+        if (!triggered) { result.complete(null); return@Thread }
+        val from = maxOf(0, speechStart - rate * 3 / 10)
+        val to = minOf(keep.size, lastLoud + rate * 3 / 10)
+        Log.i(TAG, "barge: ${(to - from) * 1000 / rate} ms of the user's speech")
+        result.complete(keep.slice(from, to))
+    }.apply { name = "cue-barge-in"; isDaemon = true; start() }
+
+    /** Cue finished speaking without being interrupted: stop listening. */
+    fun close() { if (!triggered) closed = true }
+
+    /** What the user said over Cue, once they pause; null if they didn't. */
+    suspend fun utterance(): ShortArray? = result.await()
 }
 
 fun isNightKind(kind: String, hour: Int): Boolean = kind == ReminderKind.CHECKIN_NIGHT || (kind == "TALK" && (hour >= 20 || hour < 5))

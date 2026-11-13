@@ -138,6 +138,8 @@ class CallActivity : ComponentActivity() {
     private val pcm = PcmIO()
     private var loopJob: Job? = null
     private var typedQueue: String? = null
+    /** What the user said over Cue (barge-in): the next turn, already recorded. */
+    private var bargedAudio: ShortArray? = null
 
     private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { startCall() }
 
@@ -220,7 +222,9 @@ class CallActivity : ComponentActivity() {
                 val listenStart = System.currentTimeMillis()
                 var heardText: String? = null
                 var audio: ShortArray? = null
-                if (queued != null) heardText = queued
+                val barged = bargedAudio.also { bargedAudio = null }
+                if (barged != null) audio = barged
+                else if (queued != null) heardText = queued
                 else if (typing) { delay(250); silentSince = System.currentTimeMillis(); continue }
                 else if (f.usingModel && f.hearsAudio) {
                     // The model hears the user's own voice (the model card's spoken-question form).
@@ -240,7 +244,8 @@ class CallActivity : ComponentActivity() {
                 v.cue()
                 if (heardText != null) { lines += "user" to heardText; partial = "" } else partial = "…"
                 val player = if (f.usingModel) StreamPlayer() else null
-                val onAudio = player?.let { p -> { chunk: ShortArray -> live = Live.SPEAKING; p.push(chunk) } }
+                val barge = player?.let { listenOver(it) }
+                val onAudio = player?.let { p -> { chunk: ShortArray -> if (!p.stopped) live = Live.SPEAKING; p.push(chunk) } }
                 val reply = if (audio != null) f.userAudio(audio, onAudio) else f.userSaid(heardText!!, onAudio)
                 partial = ""
                 if (audio != null) {
@@ -250,11 +255,18 @@ class CallActivity : ComponentActivity() {
                 }
                 silentSince = System.currentTimeMillis()
                 nudged = false
-                lines += "cue" to reply.spoken
                 refreshList()
-                live = Live.SPEAKING
-                if (player != null && reply.streamed) player.finish()
-                else { player?.cancel(); voice?.speak(reply.spoken) }
+                if (player != null && reply.streamed) {
+                    live = Live.SPEAKING
+                    lines += "cue" to reply.spoken
+                    player.finish()
+                } else {
+                    player?.cancel()
+                    lines += "cue" to reply.spoken
+                    live = Live.SPEAKING
+                    voice?.speak(reply.spoken)
+                }
+                if (barge != null && afterSpeech(barge)) { lines[lines.lastIndex] = "cue" to (reply.spoken.trimEnd('.', ' ') + " —"); continue }
                 live = Live.IDLE
                 if (reply.endCall) { endCall(); break }
             }
@@ -267,10 +279,34 @@ class CallActivity : ComponentActivity() {
         val f = flow
         if (f != null && f.usingModel) {
             val player = StreamPlayer()
+            val barge = listenOver(player)
             val r = f.say(text) { player.push(it) }
             if (r.streamed) player.finish() else { player.cancel(); voice?.speak(text) }
+            afterSpeech(barge)
         } else voice?.speak(text)
         live = Live.IDLE
+    }
+
+    /** Starts listening for the user talking over Cue while [player] speaks; talking over it stops the answer. */
+    private fun listenOver(player: StreamPlayer): BargeIn? {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return null
+        return BargeIn(player).also { b ->
+            b.onTrigger = {
+                flow?.interrupt()
+                player.cancel()
+                runOnUiThread { live = Live.LISTENING; partial = "…" }
+            }
+        }
+    }
+
+    /** After Cue's speech: true if the user talked over it (their words are then the next turn). */
+    private suspend fun afterSpeech(barge: BargeIn?): Boolean {
+        if (barge == null) return false
+        if (!barge.triggered) { barge.close(); return false }
+        live = Live.LISTENING
+        bargedAudio = barge.utterance()
+        partial = ""
+        return bargedAudio != null
     }
 
     private suspend fun refreshList() {

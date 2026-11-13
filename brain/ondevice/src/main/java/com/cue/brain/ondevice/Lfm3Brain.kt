@@ -139,20 +139,20 @@ class Lfm3Brain(private val context: Context) : Brain {
     }
 
     /** The model card's TTS: [text] read aloud in the model's voice, streamed to [onAudio]. */
-    internal suspend fun say(text: String, onAudio: (FloatArray) -> Unit): Conversation.Output = lock.withLock {
+    internal suspend fun say(text: String, stop: () -> Boolean, onAudio: (FloatArray) -> Unit): Conversation.Output = lock.withLock {
         val e = engine ?: error("model not loaded")
         lmOwner = null
         val c = Conversation(e)
         c.startPlain(TTS_SYSTEM)
         // 80 ms a speech frame; a generous budget so a line is never cut off mid-word
         val budget = (text.length * 2 + 120).coerceAtMost(1400)
-        c.ask(Conversation.Question(null, text, "tts"), "", maxNewTokens = budget, speechOnly = true, listener = object : Conversation.Listener {
+        c.ask(Conversation.Question(null, text, "tts"), "", maxNewTokens = budget, speechOnly = true, stop = stop, listener = object : Conversation.Listener {
             override fun onAudio(pcm: FloatArray) = onAudio(pcm)
         })
     }
 
     /** One voice-chat answer in [chat]'s conversation, its state put back first if another prompt ran since. */
-    internal suspend fun chatTurn(chat: ChatState, q: Conversation.Question, instruction: String, onAudio: (FloatArray) -> Unit): Conversation.Output = lock.withLock {
+    internal suspend fun chatTurn(chat: ChatState, q: Conversation.Question, instruction: String, stop: () -> Boolean, onAudio: (FloatArray) -> Unit): Conversation.Output = lock.withLock {
         val e = engine ?: error("model not loaded")
         val listener = object : Conversation.Listener { override fun onAudio(pcm: FloatArray) = onAudio(pcm) }
         fun fresh(): Conversation = Conversation(e).also { it.startPlain(chat.system); chat.conv = it; chat.snapshot = null; lmOwner = chat }
@@ -163,9 +163,9 @@ class Lfm3Brain(private val context: Context) : Brain {
             if (snap == null) conv = fresh() else { val t0 = System.nanoTime(); e.lm.restore(snap); lmOwner = chat; Log.i(TAG, "chat state back in ${(System.nanoTime() - t0) / 1_000_000} ms") }
         }
         val out = try {
-            conv.ask(q, instruction, maxNewTokens = 420, listener = listener)
+            conv.ask(q, instruction, maxNewTokens = 420, listener = listener, stop = stop)
         } catch (full: Conversation.Full) {
-            fresh().ask(q, instruction, maxNewTokens = 420, listener = listener)
+            fresh().ask(q, instruction, maxNewTokens = 420, listener = listener, stop = stop)
         }
         val t0 = System.nanoTime()
         chat.snapshot = e.lm.snapshot()
@@ -214,9 +214,16 @@ private class Lfm3Session(private val brain: Lfm3Brain, private val config: Sess
         append("What you know:\n").append(ctx.replace(Regex("(?m)^User: .+\n?"), "")).append('\n')
         append(Lfm3Brain.CHAT_MODE)
     })
+    /** Set when the user talks over Cue; the model stops at its next step. Cleared by the next turn. */
+    @Volatile private var interrupted = false
+    private val stop: () -> Boolean = { interrupted }
+
+    override fun interrupt() { interrupted = true }
+
     private val goodbye = Regex("^(bye|goodbye|good night|stop|that's all|end)", RegexOption.IGNORE_CASE)
 
     override fun send(input: TurnInput): Flow<BrainEvent> = flow {
+        if (input !is TurnInput.ToolResults) interrupted = false
         when (input) {
             is TurnInput.Audio -> {
                 val pcm = FloatArray(input.pcm16k.size) { input.pcm16k[it] / 32768f }
@@ -253,7 +260,8 @@ private class Lfm3Session(private val brain: Lfm3Brain, private val config: Sess
         val hint = if (config.mode == "PRACTICE") com.cue.brain.rules.Practice.fix(text)?.let { (wrong, right) ->
             "(Kindly say that a better way to say \"$wrong\" is \"$right\", then go on with the conversation.)" } ?: "" else ""
         val q = if (rows != null) Conversation.Question(null, "", "cue", rows) else Conversation.Question(null, text, "cue")
-        val o = streamed { onAudio -> brain.chatTurn(chat, q, hint, onAudio) } ?: return false
+        val o = streamed { onAudio -> brain.chatTurn(chat, q, hint, stop, onAudio) } ?: return false
+        if (interrupted) Log.i(TAG, "chat answer interrupted by the user")
         Log.i(TAG, "chat answer in ${System.currentTimeMillis() - t0} ms, first audio ${o.timing.opt("first_audio_ms")} ms: ${o.text.take(80)}")
         emit(BrainEvent.Text(o.text.ifBlank { "Mm-hm." }))
         emit(BrainEvent.Done(false))
@@ -264,7 +272,7 @@ private class Lfm3Session(private val brain: Lfm3Brain, private val config: Sess
     private suspend fun kotlinx.coroutines.flow.FlowCollector<BrainEvent>.sayLine(text: String) {
         if (text.isNotBlank()) {
             val t0 = System.currentTimeMillis()
-            val o = streamed { onAudio -> brain.say(text, onAudio) }
+            val o = streamed { onAudio -> brain.say(text, stop, onAudio) }
             if (o != null) Log.i(TAG, "said '${text.take(60)}' in ${System.currentTimeMillis() - t0} ms, first audio ${o.timing.opt("first_audio_ms")} ms")
         }
         emit(BrainEvent.Text(text))
@@ -287,7 +295,7 @@ private class Lfm3Session(private val brain: Lfm3Brain, private val config: Sess
         var out: Conversation.Output? = null
         coroutineScope {
             launch(Dispatchers.Default) {
-                val onAudio: (FloatArray) -> Unit = { f -> chunks.trySend(ShortArray(f.size) { i -> (f[i].coerceIn(-1f, 1f) * 32767f).toInt().toShort() }) }
+                val onAudio: (FloatArray) -> Unit = { f -> if (!interrupted) chunks.trySend(ShortArray(f.size) { i -> (f[i].coerceIn(-1f, 1f) * 32767f).toInt().toShort() }) }
                 out = runCatching { job(onAudio) }.onFailure { Log.w(TAG, "model job failed", it) }.getOrNull()
                 chunks.close()
             }

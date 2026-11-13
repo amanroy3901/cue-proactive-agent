@@ -46,6 +46,7 @@ Every row below was run on the device and its log or screenshot checked. "Typed"
 | Arrival bubbles | Airport (pass and unticked items), Home (electricity bill), Clinic (latest reports), Rahul (open items) all render; geofences for Home, Office, Gym, Rao Clinic and Bengaluru airport are registered with Play services | Bubble previews, logs |
 | Apps and pinning | Pinned apps show in the bottom bar; pin/unpin limited to three | Screens |
 | All app screens | Home, Apps, Lists, Habits, Journal, Albums, album detail, Reminders, Papers, Renewals, People, Practice, Focus, Search, Settings, Debug | Screenshots |
+| Barge-in | Cue read a 19 s answer with nobody talking and did not interrupt itself; then "Wait, stop. What time is my flight?" said over an answer stopped the speech and the model within about 0.3 s, and the model answered "Your flight to Delhi is at six PM tomorrow" | Speech played from the Mac |
 | Unit tests | 19 JVM tests for phrase parsing, time parsing, ticket/bill/prescription extraction, people parsing and situation rules, all passing | `./gradlew :agent:test :brain:rules:test` |
 
 ## Not verified, and why
@@ -62,7 +63,8 @@ Every row below was run on the device and its log or screenshot checked. "Typed"
 - LFM3 still loads its vision encoder (about 12 s and 650 MB) though calls never use images.
 - LFM3 answers can run long (up to about 10 s of speech); the system turn asks for one or two short sentences, and the small model doesn't always follow it.
 - A call turn on LFM3 takes about 3 s before the first sound: transcription 0.5–2.8 s, then the answer's first audio 1.0–1.8 s, then the model's own quiet lead-in (up to about 0.8 s).
-- No barge-in: the call listens only after Cue finishes speaking, so the user can't interrupt.
+- Barge-in works only when the model is on the call. With the rules brain (Android's voice), the call still listens only after Cue finishes speaking.
+- Barge-in needs the user to be clearly louder than Cue's own voice at the microphone (about twice its leak). On the razr fold, Cue's voice leaks back at 0.15–0.45 of its level even with the echo canceller on. Speaking at the phone works; speaking softly from across the room while Cue is loud may not interrupt. The first word or two said over Cue can be lost: "Wait, stop. What time is my flight?" reached the model as "What time is my flight?".
 - Old alarms from wiped test data stay registered until they fire; they find no reminder and do nothing.
 - Album titles use the doctor's name when known ("Dr. Meera Iyer visits") even when the patient is a family member.
 

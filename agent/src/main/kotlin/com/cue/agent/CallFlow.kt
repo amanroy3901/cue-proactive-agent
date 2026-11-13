@@ -79,6 +79,9 @@ class CallFlow internal constructor(
 
     suspend fun userAudio(pcm16k: ShortArray, onAudio: ((ShortArray) -> Unit)? = null): CallReply = turn(TurnInput.Audio(pcm16k), null, onAudio)
 
+    /** The user talked over Cue: the brain stops the answer it is generating. */
+    fun interrupt() { session?.interrupt() }
+
     /** A fixed line (the opening, a nudge) in the brain's own voice when it has one; [CallReply.streamed] tells. */
     suspend fun say(text: String, onAudio: ((ShortArray) -> Unit)? = null): CallReply {
         val s = session ?: return CallReply(text, false)
