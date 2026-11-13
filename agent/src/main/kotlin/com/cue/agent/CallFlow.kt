@@ -10,8 +10,31 @@ import com.cue.domain.ReminderKind
 import com.cue.domain.ReminderStatus
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.coroutines.launch
 
-data class CallReply(val spoken: String, val endCall: Boolean, val audio: List<ShortArray> = emptyList(), val heard: String? = null, val acted: Boolean = false, val streamed: Boolean = false)
+data class CallReply(val spoken: String, val endCall: Boolean, val audio: List<ShortArray> = emptyList(), val heard: String? = null, val acted: Boolean = false,
+    val streamed: Boolean = false, val card: CallCard? = null)
+
+/** What a live two-way call tells the screen (see [CallFlow.startDuplex]). Called from network threads. */
+interface DuplexUi {
+    fun onReady() {}
+    fun onUserText(text: String, final: Boolean) {}
+    fun onModelText(delta: String) {}
+    fun onAudio(pcm: ShortArray) {}
+    fun onInterrupted() {}
+    fun onTurnComplete() {}
+    fun onCard(card: CallCard) {}
+    /** The model said goodbye and asked to hang up. */
+    fun onEndRequested() {}
+    fun onClosed(reason: String?) {}
+}
+
+/** Live updates during a turn, for the call screen: what was heard, the answer's text so far, its speech. */
+interface TurnListener {
+    fun onHeard(text: String) {}
+    fun onPartial(text: String) {}
+    fun onAudio(pcm: ShortArray) {}
+}
 
 /**
  * One conversation: a ring-first call or a Talk-to-Cue session. The call screen drives it with what the user said;
@@ -28,6 +51,10 @@ class CallFlow internal constructor(
     private val loop = ToolLoop(executor)
     private var brain: Brain = engine.router.rules
     private var session: BrainSession? = null
+    private var config: SessionConfig? = null
+    /** The live two-way session when the brain has one (a realtime cloud model). */
+    var duplex: com.cue.brain.DuplexSession? = null
+        private set
     private val transcript = mutableListOf<Pair<String, String>>()
     private val userLines = mutableListOf<String>()
     private val unhandled = mutableListOf<String>()
@@ -48,13 +75,15 @@ class CallFlow internal constructor(
         if (reminder?.habitId != null) executor.context = executor.context.copy(habitName = engine.dao.habit(reminder.habitId!!)?.name)
         val text = engine.briefings.opening(kind, reminderId)
         brain = pickBrain()
-        session = brain.openSession(SessionConfig(
+        val cfg = SessionConfig(
             mode = kind,
             rules = rules(kind),
             context = engine.briefings.contextPack(kind) + "\nOpening: $text",
-            tools = if (brain.capabilities.maxTools >= 10) CueTools.converse else CueTools.compact,
+            tools = if (brain.capabilities.maxTools >= 15) CueTools.live else if (brain.capabilities.maxTools >= 10) CueTools.converse else CueTools.compact,
             spokenReplies = true,
-        ))
+        )
+        config = cfg
+        session = brain.openSession(cfg)
         transcript += "cue" to text
         persist()
         return text
@@ -64,6 +93,11 @@ class CallFlow internal constructor(
         val wanted = engine.router.forJob("converse")
         if (wanted.name == "rules") return wanted
         if (wanted.isReady()) return wanted
+        // The cloud brain needs a network: without one, the on-device model if it is loaded, else the rules.
+        if (wanted.capabilities.needsNetwork) {
+            engine.log("${wanted.name} not reachable; working offline")
+            return engine.router.named("lfm3")?.takeIf { it.isReady() } ?: engine.router.rules
+        }
         // The model is still loading (the app was just opened): wait for it rather than spend the call on rules.
         val ready = kotlinx.coroutines.withTimeoutOrNull(30_000) { wanted.prepare() } == true
         return if (ready) wanted else engine.router.rules
@@ -75,27 +109,129 @@ class CallFlow internal constructor(
         if (kind == ReminderKind.PRACTICE) append("This is English speaking practice: keep the conversation going and gently correct one mistake per turn. ")
     }
 
-    suspend fun userSaid(text: String, onAudio: ((ShortArray) -> Unit)? = null): CallReply = turn(TurnInput.Text(text), text, onAudio)
+    suspend fun userSaid(text: String, listener: TurnListener? = null): CallReply = turn(TurnInput.Text(text, facts()), text, listener)
 
-    suspend fun userAudio(pcm16k: ShortArray, onAudio: ((ShortArray) -> Unit)? = null): CallReply = turn(TurnInput.Audio(pcm16k), null, onAudio)
+    suspend fun userAudio(pcm16k: ShortArray, listener: TurnListener? = null): CallReply = turn(TurnInput.Audio(pcm16k, facts()), null, listener)
+
+    /** A quick transcript of what the user is still saying (live captions); null when the brain can't. */
+    suspend fun preview(pcm16k: ShortArray): String? = session?.preview(pcm16k)
+
+    fun cancelPreview() { session?.cancelPreview() }
+
+    /** What is true right now, sent with every turn so the model's answer matches the screen. */
+    private suspend fun facts(): String = buildString {
+        val albumId = albumId ?: engine.activeAlbum()?.id
+        val lists = engine.dao.itemsOfType(com.cue.domain.ItemType.CHECKLIST)
+        val list = lists.firstOrNull { it.albumId == albumId && albumId != null } ?: lists.firstOrNull()
+        if (list != null) {
+            val entries = engine.dao.entries(list.id)
+            val open = entries.filter { !it.checked }.map { it.text }
+            val done = entries.filter { it.checked }.map { it.text }
+            append("${list.title} list: ").append(if (open.isEmpty()) "nothing left" else open.joinToString(", "))
+            if (done.isNotEmpty()) append(" (done: ${done.joinToString(", ")})")
+            append(". ")
+        }
+        val changed = executor.changes.takeLast(4)
+        append(if (changed.isEmpty()) "Nothing has been changed on this call." else "Changed on this call: " + changed.joinToString("; ") { it.substringAfter(": ") } + ".")
+    }
+
+    /**
+     * Starts a live two-way conversation if the brain has one: the brain hears, decides turns, handles interruptions
+     * and calls the tools itself (through the same checked executor). Returns false when the call goes turn by turn.
+     */
+    fun startDuplex(ui: DuplexUi): Boolean {
+        val cfg = config ?: return false
+        var turnActs = 0
+        var modelText = StringBuilder()
+        var lastUser: String? = null
+        // The same call repeated within a few seconds is the model repeating itself: answer it, don't do it twice.
+        val recent = HashMap<String, Pair<Long, com.cue.brain.ToolResult>>()
+        val d = brain.openDuplex(cfg, object : com.cue.brain.DuplexListener {
+            override fun onReady() = ui.onReady()
+            override fun onUserText(text: String, final: Boolean) {
+                ui.onUserText(text, final)
+                if (final) {
+                    lastUser?.let { if (turnActs == 0) unhandled += it }
+                    lastUser = text; turnActs = 0; turns++
+                    userLines += text; transcript += "user" to text
+                }
+            }
+            override fun onModelText(delta: String) { modelText.append(delta); ui.onModelText(delta) }
+            override fun onAudio(pcm24k: ShortArray) = ui.onAudio(pcm24k)
+            override fun onInterrupted() = ui.onInterrupted()
+            override fun onTurnComplete() {
+                val said = modelText.toString().trim()
+                if (said.isNotEmpty()) { transcript += "cue" to said; CueRuntime.scope.launch { persist() } }
+                modelText = StringBuilder()
+                ui.onTurnComplete()
+            }
+            override suspend fun onToolCall(call: com.cue.brain.ToolCall): com.cue.brain.ToolResult {
+                val key = call.name + call.args.toSortedMap().toString().lowercase()
+                recent[key]?.takeIf { System.currentTimeMillis() - it.first < 8_000 }?.let {
+                    engine.log("live tool ${call.name} ${call.args} repeated; not done twice")
+                    return it.second
+                }
+                return run(call).also { if (it.ok) recent[key] = System.currentTimeMillis() to it }
+            }
+
+            private suspend fun run(call: com.cue.brain.ToolCall): com.cue.brain.ToolResult {
+                // Hang up only after the user said goodbye: the model sometimes calls end_call right after greeting.
+                if (call.name == "end_call") {
+                    val last = (lastUser ?: userLines.lastOrNull()).orEmpty().lowercase()
+                    val bye = Regex("\\b(bye|goodbye|good night|that'?s (all|it)|nothing else|talk (to you )?later|see you|i'?m done|we'?re done|hang up|end the call|that will be all)\\b").containsMatchIn(last)
+                    if (!bye) {
+                        engine.log("live end_call refused: the user hasn't said goodbye ('$last')")
+                        return com.cue.brain.ToolResult("end_call", false, "The user hasn't said goodbye. Don't hang up; keep listening.")
+                    }
+                }
+                // Plain code checks the model: a list entry is only ticked or removed if the user named it.
+                if (call.name in setOf("checklist_tick", "checklist_remove", "list_delete", "habit_remove", "forget")) {
+                    val entry = call.args["entry"] ?: call.args["list"] ?: call.args["habit"] ?: call.args["words"] ?: ""
+                    val said = (userLines.takeLast(2) + (lastUser ?: "")).joinToString(" ")
+                    val named = entry.isBlank() || TextKit.number(entry) != null || entry.trim().lowercase() in setOf("done", "all done", "ticked", "completed", "checked") ||
+                        entry.lowercase().split(Regex("\\W+")).filter { it.length > 2 }.any { w -> said.lowercase().contains(w) }
+                    if (!named) {
+                        engine.log("live tool ${call.name} $entry refused: the user didn't name it ('$said')")
+                        return com.cue.brain.ToolResult(call.name, false, "The user didn't say \"$entry\". Don't change the list; ask them which entry they mean.")
+                    }
+                }
+                executor.card = null
+                val r = executor.execute(call)
+                if (r.ok) turnActs++
+                executor.card?.let { ui.onCard(it) }
+                if (call.name == "end_call") ui.onEndRequested()
+                engine.log("live tool ${call.name} ${call.args} -> ${r.ok} ${r.message}")
+                return r
+            }
+            override fun onClosed(reason: String?) = ui.onClosed(reason)
+        }) ?: return false
+        duplex = d
+        engine.log("call is live on ${brain.name}")
+        return true
+    }
 
     /** The user talked over Cue: the brain stops the answer it is generating. */
     fun interrupt() { session?.interrupt() }
 
     /** A fixed line (the opening, a nudge) in the brain's own voice when it has one; [CallReply.streamed] tells. */
-    suspend fun say(text: String, onAudio: ((ShortArray) -> Unit)? = null): CallReply {
+    suspend fun say(text: String, listener: TurnListener? = null): CallReply {
         val s = session ?: return CallReply(text, false)
         var streamed = false
-        val outcome = loop.run(s, TurnInput.Say(text), feedResults = false, onAudio = onAudio?.let { cb -> { pcm: ShortArray -> streamed = true; cb(pcm) } })
+        val outcome = loop.run(s, TurnInput.Say(text), feedResults = false, onAudio = listener?.let { l -> { pcm: ShortArray -> streamed = true; l.onAudio(pcm) } })
         return CallReply(outcome.spoken.ifBlank { text }, false, outcome.audio, streamed = streamed)
     }
 
-    private suspend fun turn(input: TurnInput, typed: String?, onAudio: ((ShortArray) -> Unit)? = null): CallReply {
+    private suspend fun turn(input: TurnInput, typed: String?, listener: TurnListener? = null): CallReply {
         val s = session ?: return CallReply("Sorry, one second.", false)
         turns++
         val before = executor.changes.size
+        executor.card = null
         var streamed = false
-        val outcome = loop.run(s, input, feedResults = true, onAudio = onAudio?.let { cb -> { pcm: ShortArray -> streamed = true; cb(pcm) } })
+        val outcome = loop.run(s, input, feedResults = true,
+            onAudio = listener?.let { l -> { pcm: ShortArray -> streamed = true; l.onAudio(pcm) } },
+            onEvent = listener?.let { l -> { ev: com.cue.brain.BrainEvent ->
+                when (ev) { is com.cue.brain.BrainEvent.Heard -> l.onHeard(ev.text); is com.cue.brain.BrainEvent.Partial -> l.onPartial(ev.text); else -> Unit }
+            } })
         // A recording with no words in it is silence, not a turn.
         if (input is TurnInput.Audio && outcome.heard == null) { turns--; return CallReply("", false) }
         val heard = typed ?: outcome.heard
@@ -107,7 +243,7 @@ class CallFlow internal constructor(
         transcript += "cue" to spoken
         persist()
         engine.log("turn[$kind] ${brain.name}: '${heard ?: "(audio)"}' -> '$spoken' tools=${outcome.toolResults.size}")
-        return CallReply(spoken, outcome.endCall, outcome.audio, heard, acted, streamed)
+        return CallReply(spoken, outcome.endCall, outcome.audio, heard, acted, streamed, executor.card)
     }
 
     private suspend fun persist() {
@@ -122,6 +258,7 @@ class CallFlow internal constructor(
         if (ended) return executor.changes
         ended = true
         session?.close()
+        duplex?.close()
         val now = engine.clock.now()
         engine.dao.call(callId)?.let { engine.dao.updateCall(it.copy(endedAt = now, outcome = "ANSWERED")) }
         runCatching { Filing(engine).file(kind, userLines, unhandled, executor.changes, albumId ?: engine.activeAlbum()?.id, practiceNotes) }

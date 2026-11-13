@@ -1,5 +1,6 @@
 package com.cue.app
 
+import com.cue.brain.cloud.GeminiBrain
 import android.Manifest
 import android.app.AlarmManager
 import android.app.NotificationManager
@@ -218,8 +219,21 @@ fun SettingsScreen(a: MainActivity, nav: Nav) {
         item { SectionLabel("Brain") }
         item {
             LiftCard(Modifier.fillMaxWidth()) {
-                BrainOption("Rules (instant, always works)", "Understands lists, notes, reminders, flights, medicines and more. Offline.", brain == "rules") { brain = "rules"; s.brainPreference = "rules"; a.cue.router.applyPreference("rules") }
-                BrainOption("LFM3-Omni-2B on the phone", a.cue.lfm3.status(), brain == "lfm3") { brain = "lfm3"; s.brainPreference = "lfm3"; a.cue.router.applyPreference("lfm3") }
+                fun use(p: String) { brain = p; s.brainPreference = p; a.cue.router.applyPreference(p) }
+                val offline = brain != "cloud"
+                ToggleRow("Work offline", if (offline) "Nothing leaves the phone. Calls use the on-device brain below."
+                    else "Calls use Google Gemini (live voice). Turn on to keep everything on the phone.", offline) { use(if (it) "lfm3" else "cloud") }
+                if (!offline) {
+                    val g = a.cue.gemini
+                    Txt(when {
+                        !g.configured -> "No Gemini key in this build. Add GEMINI_API_KEY to local.properties and rebuild. Calls work offline until then."
+                        !online(c) -> "No internet right now: calls fall back to the on-device brain."
+                        else -> "Online: ${GeminiBrain.LIVE_MODEL} for calls, ${GeminiBrain.TEXT_MODEL} for journals and filing."
+                    }, Type.small, Cue.muted, Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+                } else {
+                    BrainOption("LFM3-Omni-2B on the phone", a.cue.lfm3.status(), brain == "lfm3") { use("lfm3") }
+                    BrainOption("Rules (instant, always works)", "Understands lists, notes, reminders, flights, medicines and more.", brain == "rules") { use("rules") }
+                }
             }
         }
         item { SectionLabel("Places") }

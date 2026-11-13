@@ -24,4 +24,7 @@ kotlin {
 }
 dependencies {
     api(project(":brain:api"))
+    implementation(project(":brain:rules"))
+    implementation(libs.okhttp)
+    implementation(libs.coroutines.android)
 }

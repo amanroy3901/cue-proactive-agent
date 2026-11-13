@@ -80,4 +80,19 @@ class IntentsTest {
         assertEquals("night", c.args["which"])
         assertEquals("morning", calls("call me every morning at 7").single().args["which"])
     }
+
+    @Test fun questionsReadTheData() {
+        assertEquals("list_read", calls("what's in my list").single().name)
+        assertEquals("list_read", calls("update the list").single().name)
+        assertEquals("habits_read", calls("what about the habits, what progress").single().name)
+        assertEquals("journal_lookup", calls("show me my journal").single().name)
+        assertEquals("reminders_read", calls("what reminders do I have").single().name)
+        assertEquals("people_read", calls("anything pending with Rahul").single().name)
+        assertEquals("checklist_add", calls("can you add milk to the list").single().name)
+    }
+
+    @Test fun removeFromList() {
+        assertEquals("done", calls("can you remove all the things that we are already done").single().args["entries"] ?: calls("can you remove all the things that we are already done").single().args["entry"])
+        assertEquals("charger", calls("remove the charger from my list").single().args["entry"])
+    }
 }

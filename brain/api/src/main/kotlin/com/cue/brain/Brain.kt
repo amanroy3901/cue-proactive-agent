@@ -18,6 +18,13 @@ interface Brain {
 
     fun openSession(config: SessionConfig): BrainSession
 
+    /**
+     * A conversation that listens and talks at the same time (a realtime voice model): the provider decides when the
+     * user has finished, stops talking when interrupted, and calls tools as it goes. Null when the provider works
+     * turn by turn; the call then uses [openSession].
+     */
+    fun openDuplex(config: SessionConfig, listener: DuplexListener): DuplexSession? = null
+
     /** One-shot text job (post-call filing, document enrichment). Output is labelled lines. */
     suspend fun complete(request: FieldsRequest): FieldsResult
 
@@ -46,12 +53,47 @@ interface BrainSession {
     fun send(input: TurnInput): Flow<BrainEvent>
     /** The user started talking over the answer: stop generating it as soon as possible (barge-in). */
     fun interrupt() {}
+    /** A quick transcript of speech still being recorded, for live captions; null if the provider can't. */
+    suspend fun preview(pcm16k: ShortArray): String? = null
+    /** Abandon a [preview] in progress (the turn itself is about to start). */
+    fun cancelPreview() {}
     fun close()
 }
 
+/** A live two-way voice conversation (see [Brain.openDuplex]). */
+interface DuplexSession {
+    /** The microphone, 16 kHz mono 16-bit, sent as it is recorded. */
+    fun sendAudio(pcm16k: ShortArray)
+    /** Something the user typed. */
+    fun sendText(text: String)
+    /** A picture the user is showing (JPEG), at most about one a second. */
+    fun sendImage(jpeg: ByteArray)
+    /** An instruction from the app that is not the user speaking: "say this greeting", "the user went quiet". */
+    fun prompt(text: String)
+    fun close()
+}
+
+/** What a [DuplexSession] reports. Called from the provider's own threads. */
+interface DuplexListener {
+    fun onReady() {}
+    /** What the user is saying, as it is recognised; [final] once their turn is over. */
+    fun onUserText(text: String, final: Boolean) {}
+    /** More of the model's spoken words, as text, in step with its audio. */
+    fun onModelText(delta: String) {}
+    fun onAudio(pcm24k: ShortArray) {}
+    /** The user started talking over the model: stop playing what is queued. */
+    fun onInterrupted() {}
+    /** The model finished its turn. */
+    fun onTurnComplete() {}
+    /** A tool the model wants run; the result goes back to it. */
+    suspend fun onToolCall(call: ToolCall): ToolResult
+    fun onClosed(reason: String?) {}
+}
+
 sealed interface TurnInput {
-    data class Text(val text: String) : TurnInput
-    data class Audio(val pcm16k: ShortArray) : TurnInput
+    /** [facts]: what is true right now (the list, what this call changed), so a model's answer can't drift from it. */
+    data class Text(val text: String, val facts: String = "") : TurnInput
+    data class Audio(val pcm16k: ShortArray, val facts: String = "") : TurnInput
     data class ToolResults(val results: List<ToolResult>) : TurnInput
     /** A line the app wants said as it is (the opening, a nudge): a provider with a voice speaks it, others return it. */
     data class Say(val text: String) : TurnInput
@@ -61,6 +103,8 @@ sealed interface BrainEvent {
     data class Text(val delta: String) : BrainEvent
     data class Audio(val pcm24k: ShortArray) : BrainEvent
     data class Heard(val text: String) : BrainEvent
+    /** The answer's text so far, while it is being generated (for live captions). */
+    data class Partial(val text: String) : BrainEvent
     data class ToolCallRequested(val call: ToolCall) : BrainEvent
     data class Done(val endCall: Boolean = false, val millis: Long = 0) : BrainEvent
     data class Failed(val reason: String) : BrainEvent
@@ -94,7 +138,7 @@ data class TurnOutcome(
  * the provider can use them. Same for every provider.
  */
 class ToolLoop(private val executor: ToolExecutor, private val maxWritesPerTurn: Int = 5) {
-    suspend fun run(session: BrainSession, input: TurnInput, feedResults: Boolean, onAudio: ((ShortArray) -> Unit)? = null): TurnOutcome {
+    suspend fun run(session: BrainSession, input: TurnInput, feedResults: Boolean, onAudio: ((ShortArray) -> Unit)? = null, onEvent: ((BrainEvent) -> Unit)? = null): TurnOutcome {
         val text = StringBuilder()
         val audio = mutableListOf<ShortArray>()
         val results = mutableListOf<ToolResult>()
@@ -106,7 +150,8 @@ class ToolLoop(private val executor: ToolExecutor, private val maxWritesPerTurn:
             when (ev) {
                 is BrainEvent.Text -> text.append(ev.delta)
                 is BrainEvent.Audio -> if (onAudio != null) onAudio(ev.pcm24k) else audio += ev.pcm24k
-                is BrainEvent.Heard -> heard = ev.text
+                is BrainEvent.Heard -> { heard = ev.text; onEvent?.invoke(ev) }
+                is BrainEvent.Partial -> onEvent?.invoke(ev)
                 is BrainEvent.ToolCallRequested -> {
                     calls++
                     results += if (calls > maxWritesPerTurn) ToolResult(ev.call.name, false, "too many actions in one turn")
@@ -117,11 +162,11 @@ class ToolLoop(private val executor: ToolExecutor, private val maxWritesPerTurn:
             }
         }
         if (feedResults && results.isNotEmpty() && failed == null) {
-            val follow = session.send(TurnInput.ToolResults(results)).toList()
-            follow.forEach { ev ->
+            session.send(TurnInput.ToolResults(results)).collect { ev ->
                 when (ev) {
                     is BrainEvent.Text -> text.append(ev.delta)
                     is BrainEvent.Audio -> if (onAudio != null) onAudio(ev.pcm24k) else audio += ev.pcm24k
+                    is BrainEvent.Partial -> onEvent?.invoke(ev)
                     is BrainEvent.Done -> end = end || ev.endCall
                     else -> Unit
                 }
@@ -148,5 +193,6 @@ class BrainRouter(private val brains: Map<String, Brain>, private val fallback: 
     }
 
     fun all(): Collection<Brain> = brains.values
+    fun named(name: String): Brain? = brains[name]
     val rules: Brain get() = fallback
 }

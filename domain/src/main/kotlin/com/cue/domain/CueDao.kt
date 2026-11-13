@@ -38,6 +38,7 @@ interface CueDao {
     @Query("SELECT * FROM checklist_entry ORDER BY checked, position") fun allEntriesFlow(): Flow<List<ChecklistEntry>>
     @Query("SELECT * FROM checklist_entry WHERE checked = 0 ORDER BY position") suspend fun openEntries(): List<ChecklistEntry>
     @Query("SELECT * FROM checklist_entry WHERE id = :id") suspend fun entry(id: Long): ChecklistEntry?
+    @Query("DELETE FROM checklist_entry WHERE id = :id") suspend fun deleteEntry(id: Long)
 
     // Albums
     @Insert suspend fun insertAlbum(album: Album): Long
@@ -97,6 +98,11 @@ interface CueDao {
     @Query("SELECT * FROM habit ORDER BY createdAt") fun habitsFlow(): Flow<List<Habit>>
     @Query("SELECT * FROM habit WHERE name LIKE :name LIMIT 1") suspend fun habitByName(name: String): Habit?
     @Query("SELECT * FROM habit WHERE id = :id") suspend fun habit(id: Long): Habit?
+    @Update suspend fun updateHabit(habit: Habit)
+    @Query("DELETE FROM habit WHERE id = :id") suspend fun deleteHabit(id: Long)
+    @Query("DELETE FROM habit_log WHERE habitId = :habitId") suspend fun deleteHabitLogs(habitId: Long)
+    @Query("SELECT * FROM pending_item WHERE id = :id") suspend fun pending(id: Long): PendingItem?
+    @Query("DELETE FROM pending_item WHERE id = :id") suspend fun deletePending(id: Long)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertHabitLog(log: HabitLog): Long
     @Query("SELECT * FROM habit_log WHERE habitId = :habitId ORDER BY day DESC LIMIT 60") suspend fun habitLogs(habitId: Long): List<HabitLog>
     @Query("SELECT * FROM habit_log ORDER BY day DESC") fun habitLogsFlow(): Flow<List<HabitLog>>

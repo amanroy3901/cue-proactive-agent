@@ -128,12 +128,12 @@ class Lfm3Brain(private val context: Context) : Brain {
     }
 
     /** The model card's ASR: what the user said, word for word. */
-    internal suspend fun transcribe(rows: List<FloatArray>): String = lock.withLock {
+    internal suspend fun transcribe(rows: List<FloatArray>, stop: () -> Boolean = { false }): String = lock.withLock {
         val e = engine ?: error("model not loaded")
         lmOwner = null
         val c = Conversation(e)
         c.startPlain(ASR_SYSTEM)
-        val out = c.ask(Conversation.Question(null, "", "asr", rows), "", maxNewTokens = 160, textOnly = true)
+        val out = c.ask(Conversation.Question(null, "", "asr", rows), "", maxNewTokens = 160, textOnly = true, stop = stop)
         Log.i(TAG, "asr ${out.timing.optDouble("wall_ms").toInt()} ms: '${out.text}'")
         out.text.trim()
     }
@@ -152,9 +152,12 @@ class Lfm3Brain(private val context: Context) : Brain {
     }
 
     /** One voice-chat answer in [chat]'s conversation, its state put back first if another prompt ran since. */
-    internal suspend fun chatTurn(chat: ChatState, q: Conversation.Question, instruction: String, stop: () -> Boolean, onAudio: (FloatArray) -> Unit): Conversation.Output = lock.withLock {
+    internal suspend fun chatTurn(chat: ChatState, q: Conversation.Question, instruction: String, stop: () -> Boolean, onAudio: (FloatArray) -> Unit, onText: (String) -> Unit = {}): Conversation.Output = lock.withLock {
         val e = engine ?: error("model not loaded")
-        val listener = object : Conversation.Listener { override fun onAudio(pcm: FloatArray) = onAudio(pcm) }
+        val listener = object : Conversation.Listener {
+            override fun onAudio(pcm: FloatArray) = onAudio(pcm)
+            override fun onText(text: String) = onText(text)
+        }
         fun fresh(): Conversation = Conversation(e).also { it.startPlain(chat.system); chat.conv = it; chat.snapshot = null; lmOwner = chat }
         var conv = chat.conv
         if (conv == null) conv = fresh()
@@ -220,6 +223,19 @@ private class Lfm3Session(private val brain: Lfm3Brain, private val config: Sess
 
     override fun interrupt() { interrupted = true }
 
+    @Volatile private var previewStopped = false
+
+    override suspend fun preview(pcm16k: ShortArray): String? {
+        previewStopped = false
+        val pcm = FloatArray(pcm16k.size) { pcm16k[it] / 32768f }
+        return runCatching {
+            val rows = brain.encode(pcm)
+            if (rows.isEmpty() || previewStopped) null else brain.transcribe(rows) { previewStopped }.takeIf { !previewStopped }
+        }.getOrNull()
+    }
+
+    override fun cancelPreview() { previewStopped = true }
+
     private val goodbye = Regex("^(bye|goodbye|good night|stop|that's all|end)", RegexOption.IGNORE_CASE)
 
     override fun send(input: TurnInput): Flow<BrainEvent> = flow {
@@ -232,35 +248,39 @@ private class Lfm3Session(private val brain: Lfm3Brain, private val config: Sess
                 val heard = runCatching { brain.transcribe(rows) }.getOrElse { Log.w(TAG, "asr failed", it); "" }
                 if (heard.isBlank()) { emit(BrainEvent.Failed("nothing heard")); return@flow }
                 emit(BrainEvent.Heard(heard))
-                userTurn(heard, rows)
+                userTurn(heard, rows, input.facts)
             }
-            is TurnInput.Text -> userTurn(input.text, null)
+            is TurnInput.Text -> userTurn(input.text, null, input.facts)
             is TurnInput.ToolResults -> rules.send(input).collect { ev -> if (ev is BrainEvent.Text) sayLine(ev.delta) else emit(ev) }
             is TurnInput.Say -> { sayLine(input.text); emit(BrainEvent.Done(false)) }
         }
     }.flowOn(Dispatchers.Default)
 
     /** What the user said: actions through the rules (exact), conversation through the model's voice chat. */
-    private suspend fun kotlinx.coroutines.flow.FlowCollector<BrainEvent>.userTurn(text: String, rows: List<FloatArray>?) {
+    private suspend fun kotlinx.coroutines.flow.FlowCollector<BrainEvent>.userTurn(text: String, rows: List<FloatArray>?, facts: String) {
         if (config.mode == "PRACTICE" && !goodbye.containsMatchIn(text.trim())) {
-            if (chatAnswer(text, rows)) return
+            if (chatAnswer(text, rows, facts)) return
         }
         val events = rules.send(TurnInput.Text(text)).toList()
         val acts = events.any { it is BrainEvent.ToolCallRequested }
         val ends = events.any { it is BrainEvent.Done && it.endCall }
         if (acts) { events.forEach { emit(it) }; return }
         if (ends) { events.forEach { ev -> if (ev is BrainEvent.Text) sayLine(ev.delta) else emit(ev) }; return }
-        if (!chatAnswer(text, rows)) events.forEach { emit(it) }
+        if (!chatAnswer(text, rows, facts)) events.forEach { emit(it) }
     }
 
     /** A voice-chat answer to the user's own audio (or typed text); false if the model could not answer. */
-    private suspend fun kotlinx.coroutines.flow.FlowCollector<BrainEvent>.chatAnswer(text: String, rows: List<FloatArray>?): Boolean {
+    private suspend fun kotlinx.coroutines.flow.FlowCollector<BrainEvent>.chatAnswer(text: String, rows: List<FloatArray>?, facts: String): Boolean {
         val t0 = System.currentTimeMillis()
         // The model card: further instructions go in the user turn, after the question.
         val hint = if (config.mode == "PRACTICE") com.cue.brain.rules.Practice.fix(text)?.let { (wrong, right) ->
             "(Kindly say that a better way to say \"$wrong\" is \"$right\", then go on with the conversation.)" } ?: "" else ""
+        // The model card: further instructions go in the user turn. What is true right now goes with every turn,
+        // so the answer can't drift from the list on the screen or claim something this call didn't do.
+        val now = if (facts.isNotBlank() && config.mode != "PRACTICE") "\n(Right now: $facts)" else ""
+        val instruction = (hint + now).trim()
         val q = if (rows != null) Conversation.Question(null, "", "cue", rows) else Conversation.Question(null, text, "cue")
-        val o = streamed { onAudio -> brain.chatTurn(chat, q, hint, stop, onAudio) } ?: return false
+        val o = streamed { onAudio, onText -> brain.chatTurn(chat, q, instruction, stop, onAudio, onText) } ?: return false
         if (interrupted) Log.i(TAG, "chat answer interrupted by the user")
         Log.i(TAG, "chat answer in ${System.currentTimeMillis() - t0} ms, first audio ${o.timing.opt("first_audio_ms")} ms: ${o.text.take(80)}")
         emit(BrainEvent.Text(o.text.ifBlank { "Mm-hm." }))
@@ -271,15 +291,16 @@ private class Lfm3Session(private val brain: Lfm3Brain, private val config: Sess
     /** A fixed line in the model's voice (TTS prompt); the text is emitted too, and alone if the model fails. */
     private suspend fun kotlinx.coroutines.flow.FlowCollector<BrainEvent>.sayLine(text: String) {
         if (text.isNotBlank()) {
+            emit(BrainEvent.Partial(text))
             val t0 = System.currentTimeMillis()
-            val o = streamed { onAudio -> brain.say(text, stop, onAudio) }
+            val o = streamed { onAudio, _ -> brain.say(text, stop, onAudio) }
             if (o != null) Log.i(TAG, "said '${text.take(60)}' in ${System.currentTimeMillis() - t0} ms, first audio ${o.timing.opt("first_audio_ms")} ms")
         }
         emit(BrainEvent.Text(text))
     }
 
     /** Runs a model job and emits its speech as it is generated; null if the job failed. */
-    private suspend fun kotlinx.coroutines.flow.FlowCollector<BrainEvent>.streamed(job: suspend ((FloatArray) -> Unit) -> Conversation.Output): Conversation.Output? {
+    private suspend fun kotlinx.coroutines.flow.FlowCollector<BrainEvent>.streamed(job: suspend ((FloatArray) -> Unit, (String) -> Unit) -> Conversation.Output): Conversation.Output? {
         var o = streamedInner(job)
         // Debug builds keep the last few answers' speech (files/voice) to check how it sounds.
         if (brain.debugVoice) o?.let { out -> runCatching {
@@ -290,16 +311,17 @@ private class Lfm3Session(private val brain: Lfm3Brain, private val config: Sess
         return o
     }
 
-    private suspend fun kotlinx.coroutines.flow.FlowCollector<BrainEvent>.streamedInner(job: suspend ((FloatArray) -> Unit) -> Conversation.Output): Conversation.Output? {
-        val chunks = Channel<ShortArray>(Channel.UNLIMITED)
+    private suspend fun kotlinx.coroutines.flow.FlowCollector<BrainEvent>.streamedInner(job: suspend ((FloatArray) -> Unit, (String) -> Unit) -> Conversation.Output): Conversation.Output? {
+        val events = Channel<BrainEvent>(Channel.UNLIMITED)
         var out: Conversation.Output? = null
         coroutineScope {
             launch(Dispatchers.Default) {
-                val onAudio: (FloatArray) -> Unit = { f -> if (!interrupted) chunks.trySend(ShortArray(f.size) { i -> (f[i].coerceIn(-1f, 1f) * 32767f).toInt().toShort() }) }
-                out = runCatching { job(onAudio) }.onFailure { Log.w(TAG, "model job failed", it) }.getOrNull()
-                chunks.close()
+                val onAudio: (FloatArray) -> Unit = { f -> if (!interrupted) events.trySend(BrainEvent.Audio(ShortArray(f.size) { i -> (f[i].coerceIn(-1f, 1f) * 32767f).toInt().toShort() })) }
+                val onText: (String) -> Unit = { t -> if (!interrupted) events.trySend(BrainEvent.Partial(t)) }
+                out = runCatching { job(onAudio, onText) }.onFailure { Log.w(TAG, "model job failed", it) }.getOrNull()
+                events.close()
             }
-            for (c in chunks) emit(BrainEvent.Audio(c))
+            for (e in events) emit(e)
         }
         return out
     }

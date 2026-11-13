@@ -200,7 +200,7 @@ class VoiceIO(private val context: Context) {
         }
     }
 
-    suspend fun speak(text: String) {
+    suspend fun speak(text: String, onRange: ((Int) -> Unit)? = null) {
         if (text.isBlank()) return
         val t = tts ?: return
         withContext(Dispatchers.Main) {
@@ -211,6 +211,7 @@ class VoiceIO(private val context: Context) {
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
                 t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {}
+                    override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) { if (utteranceId == id) onRange?.invoke(end) }
                     override fun onDone(utteranceId: String?) { if (utteranceId == id && cont.isActive) cont.resume(Unit) }
                     @Deprecated("Deprecated in Java") override fun onError(utteranceId: String?) { if (cont.isActive) cont.resume(Unit) }
                     override fun onError(utteranceId: String?, errorCode: Int) { if (cont.isActive) cont.resume(Unit) }
@@ -333,7 +334,8 @@ class PcmIO {
      * speech with 300 ms either side, or null if nobody spoke. [stop] ends it early (the user switched to typing).
      */
     @SuppressLint("MissingPermission")
-    suspend fun record(maxMs: Int = 30_000, waitMs: Int = 8_000, silenceMs: Int = 1_000, stop: () -> Boolean = { false }, onLevel: (Float) -> Unit = {}): ShortArray? = withContext(Dispatchers.IO) {
+    suspend fun record(maxMs: Int = 30_000, waitMs: Int = 8_000, silenceMs: Int = 1_000, stop: () -> Boolean = { false }, onLevel: (Float) -> Unit = {},
+                       onProgress: ((ShortArray) -> Unit)? = null): ShortArray? = withContext(Dispatchers.IO) {
         val rate = 16_000
         val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val rec = runCatching { AudioRecord(MediaRecorder.AudioSource.MIC, rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(min, rate)) }.getOrNull()
@@ -361,6 +363,9 @@ class PcmIO {
                 onLevel((rms / (noise * 12)).toFloat().coerceIn(0f, 1f))
                 if (loud) { if (speechStart < 0) speechStart = out.size - n; lastLoud = out.size }
                 else if (speechStart < 0) base = base * 0.95 + rms * 0.05
+                // The speech so far, every 1.5 s while the user talks (for a live caption).
+                if (onProgress != null && speechStart >= 0 && (out.size - speechStart) >= rate && total % 1500 < 20 && (out.size - lastLoud) < rate / 3)
+                    onProgress(out.slice(maxOf(0, speechStart - rate * 3 / 10), out.size))
                 if (speechStart >= 0 && (out.size - lastLoud) * 1000 / rate >= silenceMs) break
                 if (speechStart < 0 && total > waitMs) break
             }
@@ -392,11 +397,13 @@ private class ShortArrayBuilder(cap: Int) {
  * version did, made the speech stall between chunks. It also keeps how loud each 10 ms of the speech is, so the
  * barge-in detector can tell Cue's own voice coming back into the microphone from the user talking over it.
  */
-class StreamPlayer {
+class StreamPlayer(voiceCall: Boolean = false) {
     private val rate = 24_000
     private val block = rate / 100 // 10 ms
+    // On a live call the speech plays as a voice call, so the phone's echo canceller can take it out of the microphone.
     private val track: AudioTrack = AudioTrack.Builder()
-        .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+        .setAudioAttributes(AudioAttributes.Builder().setUsage(if (voiceCall) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
         .setAudioFormat(AudioFormat.Builder().setSampleRate(rate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
         .setBufferSizeInBytes(maxOf(AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT), rate * 2))
         .setTransferMode(AudioTrack.MODE_STREAM).build()
@@ -428,9 +435,51 @@ class StreamPlayer {
         }
     }.apply { name = "cue-player"; isDaemon = true; start() }
 
+    /** Samples pushed so far, and (sample, characters) marks: this much of the text belongs to the audio up to here. */
+    @Volatile private var pushed = 0L
+    private val marks = ArrayList<Pair<Long, Int>>()
+    @Volatile private var done = false
+    private var shownChars = 0
+
+    /** The text so far ([chars] long) goes with the audio pushed so far (a live model sends both together). */
+    fun mark(chars: Int) = synchronized(marks) { marks += pushed to chars }
+
+    /** All the speech has been pushed; the highlight can spread the text over its real length. */
+    fun markDone() { done = true }
+
+    /** Characters heard so far, from the marks (live model). */
+    fun spokenChars(): Int {
+        val h = head.toLong()
+        synchronized(marks) {
+            if (marks.isEmpty()) return 0
+            var i = marks.indexOfLast { it.first <= h }
+            if (i < 0) return 0
+            val (s0, c0) = marks[i]
+            val next = marks.getOrNull(i + 1) ?: return c0
+            val f = ((h - s0).toDouble() / (next.first - s0).coerceAtLeast(1)).coerceIn(0.0, 1.0)
+            return (c0 + (next.second - c0) * f).toInt()
+        }
+    }
+
+    /** Characters of a [total]-long line heard so far, by time (the on-device model writes its text ahead of its voice). */
+    fun estimatedChars(total: Int): Int {
+        val (first, last) = synchronized(this) {
+            var a = -1; var b = -1
+            for (j in 0 until envSize) if (env[j] > 400) { if (a < 0) a = j; b = j }
+            a to b
+        }
+        if (first < 0) return 0
+        val spokenMs = head * 1000L / rate - first * 10L
+        if (spokenMs <= 0) return 0
+        val est = if (done && last > first) (total * spokenMs / ((last - first) * 10L)).toInt() else (spokenMs * 14 / 1000).toInt()
+        shownChars = maxOf(shownChars, est.coerceAtMost(total))
+        return shownChars
+    }
+
     fun push(pcm: ShortArray) {
         if (stopped || pcm.isEmpty()) return
         started = true
+        pushed += pcm.size
         synchronized(this) {
             for (v in pcm) {
                 partSum += v * v.toDouble(); partN++
@@ -445,7 +494,8 @@ class StreamPlayer {
         queue.put(pcm)
     }
 
-    @Volatile private var released = false
+    @Volatile var released = false
+        private set
     private val head: Int get() = if (released) 0 else runCatching { track.playbackHeadPosition }.getOrDefault(0)
 
     /** Whether speech is coming out of the speaker now. */
@@ -575,6 +625,136 @@ class BargeIn(private val player: StreamPlayer) {
 
     /** What the user said over Cue, once they pause; null if they didn't. */
     suspend fun utterance(): ShortArray? = result.await()
+}
+
+/**
+ * The microphone on a live call, 16 kHz in 40 ms chunks. It records with the speech-recognition input, which keeps
+ * the user's voice clean (the voice-call input's processing chopped far-away speech into fragments on the razr
+ * fold). That input has no echo cancelling, so while Cue is talking ([cueLevel] > 0) the model gets silence instead,
+ * unless the user is clearly talking over Cue: the same leak-aware check as [BargeIn] (the microphone well above
+ * how much of Cue's voice comes back into it, for 240 ms). Then the last 300 ms and everything after go to the model,
+ * and [onBargeIn] stops Cue at once.
+ */
+class MicStream(
+    private val onChunk: (ShortArray) -> Unit,
+    private val onLevel: (Float) -> Unit = {},
+    private val dump: java.io.File? = null,
+    private val mode: String = "gated",
+    private val cueLevel: () -> Float = { 0f },
+    private val onBargeIn: () -> Unit = {},
+) {
+    @Volatile private var running = false
+    private var thread: Thread? = null
+
+    @SuppressLint("MissingPermission")
+    fun start() {
+        if (running) return
+        running = true
+        thread = Thread {
+            val rate = 16_000
+            val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+            val source = when (mode) { "vc" -> MediaRecorder.AudioSource.VOICE_COMMUNICATION; "mic" -> MediaRecorder.AudioSource.MIC; else -> MediaRecorder.AudioSource.VOICE_RECOGNITION }
+            val rec = runCatching { AudioRecord(source, rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(min, rate)) }.getOrNull()
+            if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { Log.w(TAG, "mic stream: could not open"); rec?.release(); return@Thread }
+            val gated = mode == "gated"
+            Log.i(TAG, "mic stream: on, mode $mode")
+            // Debug builds keep the last call's microphone audio as the model got it (files/voice/mic.pcm).
+            val dumpOut = dump?.let { runCatching { it.parentFile?.mkdirs(); java.io.BufferedOutputStream(java.io.FileOutputStream(it)) }.getOrNull() }
+            val buf = ShortArray(rate / 25)
+            val recent = ArrayDeque<ShortArray>() // the last 300 ms, sent first when the user talks over Cue
+            var coupling = 0.3
+            var noise = -1.0
+            var run = 0
+            var gap = 0
+            var talkingOver = false
+            var cueQuietSince = 0L
+            var secSum = 0.0; var secN = 0; var secPeak = 0.0; var secSent = 0
+            // Automatic gain for what is sent: the speech-recognition input has none, and quiet speech (rms 200-350
+            // a metre away) was often misheard by the live model. Brings speech towards rms 2500, at most 8x.
+            var speechLevel = 600.0
+            var gain = 1.0
+            // Noise gate: between words the model gets true silence, so the room's hum (rms ~200 here, ~800 after
+            // the gain) can't hide the end of the user's turn. Opens on speech with the 300 ms before it.
+            var lastSpeechAt = 0L
+            var gateOpen = false
+            rec.startRecording()
+            try {
+                while (running) {
+                    val n = rec.read(buf, 0, buf.size)
+                    if (n <= 0) break
+                    val chunk = buf.copyOf(n)
+                    var sum = 0.0
+                    for (i in 0 until n) sum += chunk[i] * chunk[i].toDouble()
+                    val m = kotlin.math.sqrt(sum / n)
+                    onLevel((m / 2500).toFloat().coerceIn(0f, 1f))
+                    val r = if (gated) cueLevel().toDouble() else 0.0
+                    val now = System.currentTimeMillis()
+                    if (r >= 50) cueQuietSince = 0L else if (cueQuietSince == 0L) cueQuietSince = now
+                    // Cue's voice keeps echoing for a moment after it stops.
+                    val cueTalking = r >= 50 || (cueQuietSince != 0L && now - cueQuietSince < 250)
+                    var send = true
+                    if (cueTalking && !talkingOver) {
+                        if (r > 300 && run == 0) {
+                            val ratio = minOf(m / r, coupling * 3)
+                            coupling = (if (ratio > coupling) coupling + 0.08 * (ratio - coupling) else coupling - 0.005 * (coupling - ratio)).coerceIn(0.05, 2.0)
+                        }
+                        val floor = if (noise < 0) 200.0 else maxOf(noise, 40.0)
+                        val loud = m > maxOf((coupling * r + floor) * 2.0, floor * 4, 450.0)
+                        if (loud) { run++; gap = 0 } else if (run > 0 && ++gap > 1) { run = 0; gap = 0 }
+                        if (run >= 6) {
+                            talkingOver = true
+                            Log.i(TAG, "mic stream: the user is talking over Cue (mic %.0f, cue %.0f, leak %.2f)".format(m, r, coupling))
+                            onBargeIn()
+                            recent.forEach { val o = amplify(it, gain); onChunk(o); dumpOut?.write(bytes(o)) }
+                            recent.clear()
+                        } else send = false
+                    } else if (!cueTalking) {
+                        talkingOver = false; run = 0
+                        // The room's level, learned from the quiet moments only.
+                        noise = when { noise < 0 -> m; m < noise -> noise * 0.85 + m * 0.15; m < noise * 1.5 -> noise * 0.98 + m * 0.02; else -> noise }
+                    }
+                    val speechNow = noise > 0 && m > maxOf(noise * 1.5, 150.0)
+                    if (!cueTalking && speechNow) speechLevel = speechLevel * 0.9 + m * 0.1
+                    gain = gain * 0.8 + (2500.0 / speechLevel).coerceIn(1.0, 8.0) * 0.2
+                    if (speechNow) lastSpeechAt = now
+                    val voiced = talkingOver || now - lastSpeechAt < 450
+                    if (send && voiced && !gateOpen) { recent.forEach { onChunk(amplify(it, gain)) } } // the start of the word
+                    gateOpen = send && voiced
+                    val out = if (gateOpen) amplify(chunk, gain) else ShortArray(n)
+                    if (gateOpen) secSent++
+                    onChunk(out)
+                    dumpOut?.write(bytes(out))
+                    recent.addLast(chunk); while (recent.size > 8) recent.removeFirst()
+                    secSum += m; secN++; secPeak = maxOf(secPeak, m)
+                    if (secN == 25) { Log.i(TAG, "mic stream: level %.0f, peak %.0f, sent %d/25, room %.0f, leak %.2f, gain %.1f".format(secSum / secN, secPeak, secSent, noise, coupling, gain)); secSum = 0.0; secN = 0; secPeak = 0.0; secSent = 0 }
+                }
+            } finally { runCatching { rec.stop() }; rec.release(); runCatching { dumpOut?.close() } }
+        }.apply { name = "cue-mic"; isDaemon = true; start() }
+    }
+
+    private fun amplify(pcm: ShortArray, g: Double): ShortArray =
+        if (g <= 1.01) pcm else ShortArray(pcm.size) { i -> (pcm[i] * g).toInt().coerceIn(-32768, 32767).toShort() }
+
+    private fun bytes(pcm: ShortArray): ByteArray {
+        val bb = java.nio.ByteBuffer.allocate(pcm.size * 2).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        bb.asShortBuffer().put(pcm)
+        return bb.array()
+    }
+
+    fun stop() { running = false }
+}
+
+/** Puts the phone in voice-call audio mode on the loudspeaker for a live call (so echo cancelling applies), and back after. */
+class CallAudio(context: Context) {
+    private val am = context.getSystemService(AudioManager::class.java)
+    private val before = am.mode
+    init {
+        runCatching {
+            am.mode = AudioManager.MODE_IN_COMMUNICATION
+            am.availableCommunicationDevices.firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }?.let { am.setCommunicationDevice(it) }
+        }.onFailure { Log.w(TAG, "call audio: ${it.message}") }
+    }
+    fun release() { runCatching { am.clearCommunicationDevice(); am.mode = before } }
 }
 
 fun isNightKind(kind: String, hour: Int): Boolean = kind == ReminderKind.CHECKIN_NIGHT || (kind == "TALK" && (hour >= 20 || hour < 5))

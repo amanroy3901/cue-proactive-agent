@@ -56,6 +56,8 @@ object ReminderKind {
     const val GENERIC = "GENERIC"
     const val PRELOAD = "PRELOAD"
     const val AIRPORT_BACKUP = "AIRPORT_BACKUP"
+    /** A focus session: a quiet notification when the time is up. */
+    const val FOCUS = "FOCUS"
 
     val calls = setOf(CHECKIN_MORNING, CHECKIN_NIGHT, LEAVE_BY, DOSE, EXPIRY, ACCOUNTABILITY, PRACTICE, CARE, GENERIC)
 }

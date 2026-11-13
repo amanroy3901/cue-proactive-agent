@@ -17,6 +17,7 @@ import com.cue.agent.DeviceState
 import com.cue.brain.BrainRouter
 import com.cue.brain.ondevice.Lfm3Brain
 import com.cue.brain.rules.RulesBrain
+import com.cue.brain.cloud.GeminiBrain
 import com.cue.call.RingController
 import com.cue.domain.BubbleSpec
 import com.cue.domain.CallRequest
@@ -47,6 +48,8 @@ class CueApp : Application() {
         private set
     lateinit var router: BrainRouter
         private set
+    lateinit var gemini: GeminiBrain
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -54,7 +57,8 @@ class CueApp : Application() {
         val dao = CueDatabase.get(this).dao()
         val rules = RulesBrain()
         lfm3 = Lfm3Brain(this)
-        router = BrainRouter(mapOf("rules" to rules, "lfm3" to lfm3), rules).apply { applyPreference(settings.brainPreference) }
+        gemini = GeminiBrain(BuildConfig.GEMINI_API_KEY) { online(this) }
+        router = BrainRouter(mapOf("rules" to rules, "lfm3" to lfm3, "cloud" to gemini), rules).apply { applyPreference(settings.brainPreference) }
         engine = CueEngine(
             dao = dao,
             clock = SystemClock,
@@ -83,9 +87,17 @@ fun CueApp.trim(level: Int) {
     }
 }
 
+/** "cloud" (Gemini, the default), "lfm3" (offline, on the phone) or "rules" (offline, no model). */
 fun BrainRouter.applyPreference(pref: String) {
-    val p = if (pref == "lfm3") "lfm3" else "rules"
+    val p = if (pref in setOf("cloud", "lfm3")) pref else "rules"
     converse = p; file = p; enrich = "rules"
+}
+
+/** Whether the phone has a working internet connection now. */
+fun online(context: Context): Boolean {
+    val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
+    val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+    return caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) && caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
 }
 
 val Context.cue: CueApp get() = applicationContext as CueApp
@@ -158,7 +170,10 @@ class PrefSettings(context: Context) : Settings {
         get() = p.getString("pins", "lists,habits")!!.split(",").filter { it.isNotBlank() }
         set(v) = p.edit().putString("pins", v.take(3).joinToString(",")).apply()
     override var onboarded: Boolean get() = p.getBoolean("onboarded", false); set(v) = p.edit().putBoolean("onboarded", v).apply()
-    override var brainPreference: String get() = p.getString("brain", "rules")!!; set(v) = p.edit().putString("brain", v).apply()
+    // Online (Gemini) by default since 2026-11-13; older installs move to it once ("brain2").
+    override var brainPreference: String
+        get() = if (!p.contains("brain2")) "cloud".also { p.edit().putString("brain2", it).apply() } else p.getString("brain2", "cloud")!!
+        set(v) = p.edit().putString("brain2", v).apply()
     override var quietStartMinutes: Int get() = p.getInt("quietStart", 23 * 60); set(v) = p.edit().putInt("quietStart", v).apply()
     override var quietEndMinutes: Int get() = p.getInt("quietEnd", 6 * 60); set(v) = p.edit().putInt("quietEnd", v).apply()
 }

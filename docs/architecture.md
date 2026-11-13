@@ -1,12 +1,23 @@
 # Cue — Architecture
 
-Nov 13, 2026 · Status: as built, revision 5 · Companion docs: [build-status.md](build-status.md), [prd.md](prd.md), [ux-flows.md](ux-flows.md), [use-cases.md](use-cases.md), [lfm3-omni-spike.md](lfm3-omni-spike.md)
+Nov 13, 2026 · Status: as built, revision 6 · Companion docs: [build-status.md](build-status.md), [prd.md](prd.md), [ux-flows.md](ux-flows.md), [use-cases.md](use-cases.md), [lfm3-omni-spike.md](lfm3-omni-spike.md)
 
 **What changed in revision 2:** the agent's brain is now **LiquidAI LFM3-Omni-2B running on the phone**, not a cloud LLM. One model hears the user, reasons, and answers in speech, with no network. This rewrites sections 2, 3, 6 to 9, 11, 13, 14, 16, 17 and 21, and adjusts the rest. A cloud LLM remains only as an optional helper that is off by default.
 
 **What changed in revision 3:** the app is split into independent modules with published contracts, and every model sits behind one **brain contract** (section 3). If the on-device model does not work out, a cloud provider is switched in behind the same API without touching the rest of the app.
 
 **What changed in revision 4:** the build decisions are fixed (package `com.cue.app`, Room 2.8 with KSP, a hand-written `CueGraph` service locator instead of Koin, compileSdk 36). **RulesBrain**, a deterministic intent parser with Android speech recognition and text-to-speech, is now the always-available brain and the guaranteed demo path; Lfm3Brain is used when its model files are present. The full use-case set from [ux-flows.md](ux-flows.md) is in scope: health, life admin, people memory, accountability calls, arrival moments, care mode (family circle) and English practice, plus the Apps and pinning model. New triggers, tables and tools are added (sections 4, 8, 9), a debug panel can fire every trigger (section 20), and section 25 maps every use case to its components.
+
+**What changed in revision 6 (Nov 13, the user's decision): online by default.** Calls use Google's Gemini Live API (`gemini-3.8-live`, an AI Studio key from `local.properties`, built into the debug APK) in `:brain:cloud` (`GeminiBrain`). Journals and filing use `gemini-3.1-flash-lite`. The on-device LFM3 path below stays behind Settings → "Work offline". How the online call works:
+
+| Topic | As built |
+| --- | --- |
+| Two-way session | `Brain.openDuplex` (new in `:brain:api`): one WebSocket; the microphone streams in 40 ms chunks, Cue's voice streams back, Google's side decides when the user has finished. `CallFlow.startDuplex` runs the model's tool calls through the same checked `CueToolExecutor`, in order, one at a time |
+| Microphone | The speech-recognition input (clean audio; the voice-call input chopped far-away speech on the razr fold). It has no echo cancelling, so while Cue talks the model gets silence, unless the leak-aware check says the user is talking over Cue (then the last 300 ms and everything after go through and Cue stops at once). A noise gate sends true silence between words; automatic gain brings quiet speech up (at most 8x) |
+| Tools | Every app: about 55 tools (table in build-status.md). Saves and reads return entry numbers like #14, and the edit tools take them, so "no, from Muskan" corrects the same entry. `forget` deletes by description when the model has no number |
+| Checks in plain code | Ticks, removals, list and habit deletes only when the user named the thing; hang-up only after a goodbye; the same call repeated within 8 s is not done twice; tool results tell the model where a thing really is when it used the wrong app's tool |
+| On screen | No card at call start; a card appears in the conversation when a tool reads or changes something (list, lists, habits, journal, reminders, found documents or notes, people, albums, renewals, focus). Live captions for both sides; the word being spoken is highlighted |
+| Fallbacks | No network or no key: calls use LFM3 if loaded, else the rules brain (pickBrain). If the live session doesn't start within 8 s the call goes turn by turn |
 
 **What changed in revision 5 (as built, tested on the razr fold 2026):** the app exists and runs every flow on the phone. Where the build differs from the sections below, this list wins:
 

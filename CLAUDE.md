@@ -61,6 +61,10 @@ Round 3 "Bloom with depth" on the design canvas https://claude.ai/artifact/Q7JAt
 ## Process we agreed on
 1. One-page PRD (draft: `docs/prd.md`) → 2. Use cases (done: `docs/use-cases.md`) → 3. Architecture (draft: `docs/architecture.md`) → 4. Risk spike → 5. Key screens → 6. Build in vertical slices, one use case end to end first → 7. Demo prep with a backup recording.
 
+## Decided by the user (2026-11-13, replaces the on-device default below)
+- **Online by default: Google's Gemini API (AI Studio key).** The on-device LFM3 path stays, behind a Settings toggle "Work offline". Reason: faster, built-in voice and barge-in, so the team can focus on the app rather than the model.
+- Built (2026-11-13): `gemini-3.8-live` for calls (Live API: voice in and out, server-side voice detection and barge-in, function calling, images mid-call); `gemini-3.1-flash-lite` for one-shot jobs (documents, screenshots, filing, journal).
+
 ## Decided by the user (2026-11-12)
 - **Model: LiquidAI LFM3-Omni-2B on the phone** (LiteRT 2.3.0 build). One model does speech in, reasoning and speech out. No cloud LLM by default, no credits, everything works in airplane mode.
 - Demo phone: motorola razr fold 2026, Snapdragon SM8845, Android 17.

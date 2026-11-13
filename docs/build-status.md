@@ -1,6 +1,6 @@
 # Cue — Build status
 
-Nov 13, 2026 · Built and tested overnight on the motorola razr fold 2026 (Android 17) · Companion docs: [architecture.md](architecture.md) (revision 5), [ux-flows.md](ux-flows.md), [prd.md](prd.md)
+Nov 13, 2026 · Built and tested overnight on the motorola razr fold 2026 (Android 17) · Companion docs: [architecture.md](architecture.md) (revision 6), [ux-flows.md](ux-flows.md), [prd.md](prd.md)
 
 ## How to run it
 
@@ -18,9 +18,32 @@ Then open Cue, finish the three-step onboarding, and go to **Settings → Debug 
 4. **Preview a bubble** shows what a bubble looks like even while the phone is locked.
 5. **On-device model** loads LFM3 and switches calls to it, or back to rules only.
 
-The phone is already set up: app installed with all permissions, demo data loaded, LFM3 model files copied to `/sdcard/Android/data/com.cue.app/files/`, calls set to use LFM3, and Home set to the phone's real location.
+**Online by default:** calls use Gemini Live. Put `GEMINI_API_KEY=...` in `local.properties` (not committed) before building. **Settings → Work offline** switches calls to the on-device LFM3 model or the rules.
+
+The phone is already set up: app installed with all permissions, demo data loaded, LFM3 model files copied to `/sdcard/Android/data/com.cue.app/files/`, and Home set to the phone's real location.
 
 On a call you can talk, or tap the keyboard button and type.
+
+## What Cue can do by voice (online)
+
+Every app's data can be read, added to, changed and removed on a call. Reads and saves return numbers (#14) so corrections change the same entry.
+
+| App | Read | Add | Change | Remove |
+| --- | --- | --- | --- | --- |
+| Lists | `list_read` (one), `lists_read` (all) | `checklist_add` (naming a new list creates it), `list_create` | `checklist_tick`, `checklist_untick`, `checklist_edit`, `list_rename` | `checklist_remove` (one, or everything done), `list_delete` |
+| Habits | `habits_read` | `habit_add`, `habit_checkin` | `habit_rename` | `habit_remove` |
+| People | `people_read` | `pending_add` | `pending_update` (by number, or by who and what), `pending_done`, `pending_resolve` | `pending_remove` |
+| Reminders and calls | `reminders_read` | `reminder_set`, `dose_schedule` | `reminder_move`, `reminder_edit`, `checkin_time` (daily calls), `practice_schedule`, `event_move` (flight) | `reminder_cancel` |
+| Notes | `notes_read` | `note_save` | `note_edit` | `note_remove` |
+| Journal | `journal_lookup` | `journal_add` | | |
+| Papers | `papers_read` (with details when few match), `paper_read`, `album_search` | (screenshots and shares) | `item_move` (into an album) | |
+| Albums | `albums_read`, `album_open` | `album_create` | `item_move` | |
+| Renewals | `renewals_read` | `renewal_remind` | | |
+| Focus | `focus_read` | `focus_start` | | `focus_stop` |
+| Anything | | | | `forget` (by description) |
+| Call | | | | `end_call` (only after a goodbye) |
+
+Tested on the phone by typing into live calls: the Oscar→Muskan style correction (updated #8, no duplicate), a new Grocery list and "add butter too" going to it, moving items off the Delhi list into a new Chhath Puja list, "what's my PNR and seat" (one step), focus start and stop, deleting a list, deleting a person's entry by description, and hanging up on "bye".
 
 ## What was tested on the phone
 
@@ -63,7 +86,9 @@ Every row below was run on the device and its log or screenshot checked. "Typed"
 - LFM3 still loads its vision encoder (about 12 s and 650 MB) though calls never use images.
 - LFM3 answers can run long (up to about 10 s of speech); the system turn asks for one or two short sentences, and the small model doesn't always follow it.
 - A call turn on LFM3 takes about 3 s before the first sound: transcription 0.5–2.8 s, then the answer's first audio 1.0–1.8 s, then the model's own quiet lead-in (up to about 0.8 s).
-- Barge-in works only when the model is on the call. With the rules brain (Android's voice), the call still listens only after Cue finishes speaking.
+- Online calls with speech played from a Mac speaker a metre away were often misheard (the room was noisy and the Mac quieter than a person at the phone); Aman's own voice was heard word for word. Indian names and words can still be misheard.
+- Gemini sometimes reaches for the wrong app's tool or tries to hang up right after greeting; plain-code checks catch these (see architecture revision 6), but a wrong guess can still need a second try.
+- Barge-in on the offline path works only when the LFM3 model is on the call. With the rules brain (Android's voice), the call still listens only after Cue finishes speaking.
 - Barge-in needs the user to be clearly louder than Cue's own voice at the microphone (about twice its leak). On the razr fold, Cue's voice leaks back at 0.15–0.45 of its level even with the echo canceller on. Speaking at the phone works; speaking softly from across the room while Cue is loud may not interrupt. The first word or two said over Cue can be lost: "Wait, stop. What time is my flight?" reached the model as "What time is my flight?".
 - Old alarms from wiped test data stay registered until they fire; they find no reminder and do nothing.
 - Album titles use the doctor's name when known ("Dr. Meera Iyer visits") even when the patient is a family member.

@@ -163,6 +163,24 @@ object Intents {
         Regex("(?:sent|gave|paid|shared)\\s+(?:.+?\\s+)?(?:to\\s+)?(\\w+)$").find(l)?.takeIf { Regex("^i (sent|gave|paid|shared)").containsMatchIn(l) }?.let { m ->
             return listOf(call("pending_resolve", "person" to m.groupValues[1]))
         }
+        // A new habit: "add a habit of journaling every night", "start tracking my walks".
+        Regex("(?:add|start|new|track(?:ing)?)\\s+(?:a\\s+|one\\s+more\\s+|another\\s+|my\\s+)?(?:new\\s+)?habit\\s+(?:to\\s+|of\\s+|for\\s+|called\\s+)?(?:add\\s+)?(?:on\\s+)?(?:a\\s+)?(\\w+)").find(l)
+            ?.let { m -> return listOf(call("habit_add", "habit" to m.groupValues[1].removeSuffix("ing").let { if (it == m.groupValues[1]) it else it })) }
+        // Removing from the list: "remove the charger", "clear the done ones", "remove everything that's done".
+        if (Regex("\\b(?:remove|delete|clear|take off|drop)\\b").containsMatchIn(l)) {
+            if (Regex("\\b(?:done|ticked|completed|checked|finished)\\b").containsMatchIn(l)) return listOf(call("checklist_remove", "entry" to "done"))
+            Regex("\\b(?:remove|delete|take off|drop)\\s+(?:the\\s+|my\\s+)?(.+?)(?:\\s+(?:from|off)\\s+(?:the|my)\\s+(?:\\w+\\s+)?list)?[.?!]*$").find(l)
+                ?.let { m -> return listOf(call("checklist_remove", "entry" to m.groupValues[1])) }
+        }
+        // Questions about what is saved: answered from the data (and shown as a card), never from the model's memory.
+        val asks = Regex("^(?:(?:so|ok(?:ay)?|well|and|hey|cue),?\\s+)*(?:what|what's|whats|which|show|read|open|tell me|let me see|can i see|can you (?:show|read|tell)|do i have|is there|any|how|update)\\b").containsMatchIn(l)
+        if (asks && Regex("\\b(?:list|checklist|to pack|packing|to-?do)\\b").containsMatchIn(l)) return listOf(call("list_read"))
+        if (asks && Regex("\\b(?:habits?|streaks?|progress|how am i doing)\\b").containsMatchIn(l)) return listOf(call("habits_read"))
+        if (Regex("\\bhow am i doing\\b").containsMatchIn(l)) return listOf(call("habits_read"))
+        if (asks && Regex("\\b(?:journal|diary)\\b").containsMatchIn(l)) return listOf(call("journal_lookup", "day" to ""))
+        if (asks && Regex("\\b(?:reminders?|scheduled|coming up|upcoming|my calls)\\b").containsMatchIn(l)) return listOf(call("reminders_read"))
+        Regex("(?:pending|open|waiting)\\s+(?:with|from|for)\\s+(\\w+)").find(l)?.takeIf { asks }?.let { m -> return listOf(call("people_read", "person" to m.groupValues[1])) }
+        if (Regex("\\b(?:what do i owe|who(?:'s| is) waiting|waiting on me|anything pending)\\b").containsMatchIn(l)) return listOf(call("people_read"))
         // Search and journal.
         Regex("(?:where(?:'s| is| are)|find|show me|what was that|look for)\\s+(?:my\\s+|the\\s+)?(.+)").find(l)?.let { m ->
             return listOf(call("album_search", "query" to m.groupValues[1]))
@@ -197,6 +215,8 @@ object Intents {
             if (!r.ok) r.message.replaceFirstChar { it.uppercase() } + "."
             else when (r.name) {
                 "checklist_add" -> "Added " + r.message.removePrefix("added ").lowercase(Locale.ROOT).split(", ").let { l -> if (l.size > 1) l.dropLast(1).joinToString(", ") + " and " + l.last() else l.first() } + "."
+                "habit_add" -> r.message.replaceFirstChar { it.uppercase() } + "."
+                "checklist_remove" -> r.message.replaceFirstChar { it.uppercase() } + "."
                 "checklist_tick" -> "Ticked. " + r.message.substringAfter("; ").replaceFirstChar { it.uppercase() } + "."
                 "note_save" -> "Noted."
                 "reminder_set" -> r.message.replaceFirstChar { it.uppercase() } + "."
@@ -209,6 +229,7 @@ object Intents {
                 "pending_resolve" -> r.message.replaceFirstChar { it.uppercase() } + "."
                 "album_search" -> "Found it: " + r.message + "."
                 "journal_lookup" -> r.message
+                "list_read", "habits_read", "reminders_read", "people_read" -> r.message.trimEnd('.') + "."
                 "renewal_remind" -> "Okay, " + r.message + ". Talk soon."
                 else -> r.message
             }

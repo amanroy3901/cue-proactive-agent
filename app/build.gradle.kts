@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -15,6 +17,9 @@ android {
         versionCode = 1
         versionName = "0.1-hackathon"
         ndk { abiFilters += setOf("arm64-v8a") }
+        // The Gemini key comes from local.properties (not committed): GEMINI_API_KEY=...
+        val local = Properties().apply { rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) } }
+        buildConfigField("String", "GEMINI_API_KEY", "\"${local.getProperty("GEMINI_API_KEY", "")}\"")
     }
 
     buildTypes {
@@ -26,7 +31,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
 
     packaging {
         jniLibs { useLegacyPackaging = true }

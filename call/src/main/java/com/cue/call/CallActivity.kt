@@ -71,7 +71,11 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
+import androidx.compose.ui.text.withStyle
+import com.cue.agent.CallCard
 import com.cue.agent.CallFlow
+import com.cue.agent.DuplexUi
+import com.cue.agent.TurnListener
 import com.cue.agent.CueRuntime
 import com.cue.agent.TextKit
 import com.cue.domain.ChecklistEntry
@@ -96,6 +100,16 @@ enum class Phase { RINGING, CONNECTING, IN_CALL, ENDED }
 fun summaryLabel(tool: String): Pair<String, Pair<Color, Color>> = when (tool) {
     "checklist_add" -> "Added to your list" to (Color(0xFF2A9A90) to Color(0xFF0D4B48))
     "checklist_tick" -> "Ticked off" to (Color(0xFF2A9A90) to Color(0xFF0D4B48))
+    "habit_add" -> "New habit" to (Color(0xFFFFC861) to Color(0xFFF08A00))
+    "habit_remove", "habit_rename" -> "Habit updated" to (Color(0xFFFFC861) to Color(0xFFF08A00))
+    "checklist_edit", "checklist_untick", "list_create", "list_rename", "list_delete" -> "List updated" to (Color(0xFF2A9A90) to Color(0xFF0D4B48))
+    "pending_update", "pending_done", "pending_remove" -> "People updated" to (Color(0xFFC6E6F5) to Color(0xFF3D8DB8))
+    "reminder_move", "reminder_edit", "reminder_cancel", "practice_schedule" -> "Reminder changed" to (Color(0xFFFFB3CB) to Color(0xFFE2547F))
+    "note_edit", "note_remove" -> "Note updated" to (Color(0xFFFFC861) to Color(0xFFF08A00))
+    "journal_add" -> "Added to your journal" to (Color(0xFFFFB49C) to Color(0xFFF0663F))
+    "album_create", "item_move" -> "Albums updated" to (Color(0xFFB9C6FF) to Color(0xFF6C7FE8))
+    "focus_start", "focus_stop" -> "Focus" to (Color(0xFFD2C2FF) to Color(0xFF8466DB))
+    "checklist_remove" -> "Removed from your list" to (Color(0xFF2A9A90) to Color(0xFF0D4B48))
     "note_save" -> "Saved a note" to (Color(0xFFFFC861) to Color(0xFFF08A00))
     "checkin_time" -> "Daily call moved" to (Color(0xFFFFB3CB) to Color(0xFFE2547F))
     "reminder_set" -> "Reminder set" to (Color(0xFFFFB3CB) to Color(0xFFE2547F))
@@ -114,19 +128,26 @@ fun summaryLabel(tool: String): Pair<String, Pair<Color, Color>> = when (tool) {
 }
 enum class Live { SPEAKING, LISTENING, THINKING, IDLE }
 
+/** One line of the conversation on screen. Its text grows while it is being said; [spoken] = characters heard so far. */
+class Line(val who: String, text: String, val card: CallCard? = null) {
+    var text by mutableStateOf(text)
+    /** -1 when this line is not being spoken now; else how many characters of it have been heard. */
+    var spoken by mutableStateOf(-1)
+}
+
 /** The call screen: shown over the lock screen for a ring, and for Talk-to-Cue from the app. */
 class CallActivity : ComponentActivity() {
     private var phase by mutableStateOf(Phase.RINGING)
     private var live by mutableStateOf(Live.IDLE)
+    /** What the user is saying right now, before their turn is over (live caption). */
     private var partial by mutableStateOf("")
     private var level by mutableStateOf(0f)
     private var seconds by mutableStateOf(0)
     private var typing by mutableStateOf(false)
     private var brainLabel by mutableStateOf("")
-    private val lines = mutableStateListOf<Pair<String, String>>()
-    private val entries = mutableStateListOf<ChecklistEntry>()
-    private var listTitle by mutableStateOf("")
-    private var justTicked by mutableStateOf<Long?>(null)
+    private val lines = mutableStateListOf<Line>()
+    /** Bumped after every turn so the cards on screen reload what is saved. */
+    private var cardVersion by mutableStateOf(0)
     private val changes = mutableStateListOf<String>()
 
     private var kind = "TALK"
@@ -140,6 +161,8 @@ class CallActivity : ComponentActivity() {
     private var typedQueue: String? = null
     /** What the user said over Cue (barge-in): the next turn, already recorded. */
     private var bargedAudio: ShortArray? = null
+    private var mic: MicStream? = null
+    private var callAudio: CallAudio? = null
 
     private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { startCall() }
 
@@ -158,7 +181,7 @@ class CallActivity : ComponentActivity() {
         if (phase == Phase.ENDED) {
             // A new call arrived while the last call's summary was showing: start fresh.
             loopJob?.cancel(); voice?.release(); voice = null; flow = null
-            lines.clear(); entries.clear(); changes.clear(); seconds = 0; partial = ""; typing = false; justTicked = null; brainLabel = ""
+            lines.clear(); changes.clear(); seconds = 0; partial = ""; typing = false; brainLabel = ""
             phase = Phase.RINGING
         }
         if (phase == Phase.RINGING) readIntent(intent)
@@ -196,6 +219,33 @@ class CallActivity : ComponentActivity() {
         finish()
     }
 
+    // ------------------------------------------------------------------ conversation on screen
+
+    private fun addLine(who: String, text: String): Line = Line(who, text).also { lines += it }
+
+    /** Shows a card in the conversation; the same card asked for again moves down to the latest place. */
+    private fun addCard(card: CallCard) {
+        lines.removeAll { it.card != null && sameCard(it.card, card) }
+        lines += Line("card", "", card)
+        cardVersion++
+    }
+
+    private fun sameCard(a: CallCard, b: CallCard): Boolean = when {
+        a is CallCard.Checklist && b is CallCard.Checklist -> a.itemId == b.itemId
+        a is CallCard.Journal && b is CallCard.Journal -> true
+        a is CallCard.People && b is CallCard.People -> a.personId == b.personId
+        a is CallCard.Found && b is CallCard.Found -> a.itemIds == b.itemIds
+        else -> a::class == b::class
+    }
+
+    /** Keeps [line]'s highlight on the word being heard, from [spokenNow], until [done] says the speech is over. */
+    private fun follow(line: Line, spokenNow: () -> Int, done: () -> Boolean): Job = lifecycleScope.launch {
+        while (!done()) { line.spoken = spokenNow().coerceIn(0, line.text.length); delay(60) }
+        line.spoken = -1
+    }
+
+    // ------------------------------------------------------------------ the call
+
     private fun startCall() {
         CallService.start(this)
         val v = VoiceIO(this).also { voice = it }
@@ -208,82 +258,212 @@ class CallActivity : ComponentActivity() {
             val f = engine.startCall(kind, reminderId)
             flow = f
             val opening = f.opening()
+            if (f.brainName == "cloud" && runDuplex(f, opening)) return@launch
             brainLabel = if (f.usingModel) "LFM3 on device" else if (v.onDevice) "on-device voice" else "phone voice"
             phase = Phase.IN_CALL
-            refreshList()
-            lines += "cue" to opening
-            speak(opening)
-            var silentSince = System.currentTimeMillis()
-            var nudged = false
-            while (phase == Phase.IN_CALL) {
-                live = Live.LISTENING
-                partial = ""
-                val queued = typedQueue.also { typedQueue = null }
-                val listenStart = System.currentTimeMillis()
-                var heardText: String? = null
-                var audio: ShortArray? = null
-                val barged = bargedAudio.also { bargedAudio = null }
-                if (barged != null) audio = barged
-                else if (queued != null) heardText = queued
-                else if (typing) { delay(250); silentSince = System.currentTimeMillis(); continue }
-                else if (f.usingModel && f.hearsAudio) {
-                    // The model hears the user's own voice (the model card's spoken-question form).
-                    audio = pcm.record(stop = { typing || typedQueue != null || phase != Phase.IN_CALL }, onLevel = { level = it })
-                } else heardText = v.listen()
-                if (phase != Phase.IN_CALL) break
-                if (heardText == null && audio == null) {
-                    if (typedQueue != null || typing) continue
-                    // A recognizer error that comes back instantly is not silence; wait a moment and listen again.
-                    if (System.currentTimeMillis() - listenStart < 1500) { delay(600); continue }
-                    val quiet = System.currentTimeMillis() - silentSince
-                    if (quiet > 22_000 && nudged) { speak("I'll let you go. Talk soon."); endCall(); break }
-                    if (quiet > 7_000 && !nudged) { nudged = true; speak("Are you there?") }
-                    continue
-                }
-                live = Live.THINKING
-                v.cue()
-                if (heardText != null) { lines += "user" to heardText; partial = "" } else partial = "…"
-                val player = if (f.usingModel) StreamPlayer() else null
-                val barge = player?.let { listenOver(it) }
-                val onAudio = player?.let { p -> { chunk: ShortArray -> if (!p.stopped) live = Live.SPEAKING; p.push(chunk) } }
-                val reply = if (audio != null) f.userAudio(audio, onAudio) else f.userSaid(heardText!!, onAudio)
-                partial = ""
-                if (audio != null) {
-                    val heard = reply.heard
-                    if (heard == null) { player?.cancel(); continue } // a sound with no words in it: keep listening
-                    lines += "user" to heard
-                }
-                silentSince = System.currentTimeMillis()
-                nudged = false
-                refreshList()
-                if (player != null && reply.streamed) {
-                    live = Live.SPEAKING
-                    lines += "cue" to reply.spoken
-                    player.finish()
-                } else {
-                    player?.cancel()
-                    lines += "cue" to reply.spoken
-                    live = Live.SPEAKING
-                    voice?.speak(reply.spoken)
-                }
-                if (barge != null && afterSpeech(barge)) { lines[lines.lastIndex] = "cue" to (reply.spoken.trimEnd('.', ' ') + " —"); continue }
-                live = Live.IDLE
-                if (reply.endCall) { endCall(); break }
+            speak(addLine("cue", opening))
+            turnLoop(f, v)
+        }
+    }
+
+    /**
+     * A live call with a realtime model (Gemini Live): the microphone streams the whole time, the model decides when
+     * the user has finished, talks back, and stops by itself when interrupted. Returns false if the session didn't
+     * start, so the call goes on turn by turn.
+     */
+    private suspend fun runDuplex(f: CallFlow, opening: String): Boolean {
+        val ready = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        var player: StreamPlayer? = null
+        var cueLine: Line? = null
+        var spokenChars = 0
+        var endRequested = false
+        var lastActivity = System.currentTimeMillis()
+        fun ui(block: () -> Unit) = runOnUiThread(block)
+        fun finishTurn() {
+            val p = player ?: return
+            player = null
+            val line = cueLine
+            lifecycleScope.launch {
+                p.finish()
+                line?.spoken = -1
+                if (player == null) live = Live.LISTENING
+                if (endRequested && player == null) endCall()
             }
+        }
+        val started = f.startDuplex(object : DuplexUi {
+            override fun onReady() { ready.complete(true) }
+            override fun onUserText(text: String, final: Boolean) = ui {
+                lastActivity = System.currentTimeMillis()
+                if (final) { partial = ""; addLine("user", text) } else { partial = text; live = Live.LISTENING }
+            }
+            override fun onModelText(delta: String) = ui {
+                val line = cueLine ?: addLine("cue", "").also { cueLine = it }
+                line.text += delta
+                spokenChars += delta.length
+                player?.mark(spokenChars)
+            }
+            override fun onAudio(pcm: ShortArray) {
+                lastActivity = System.currentTimeMillis()
+                val p = player ?: StreamPlayer().also { np ->
+                    np.mark(spokenChars)
+                    player = np
+                    ui {
+                        live = Live.SPEAKING
+                        val line = cueLine ?: addLine("cue", "").also { cueLine = it }
+                        follow(line, { np.spokenChars() }, { np.released })
+                    }
+                }
+                p.push(pcm)
+            }
+            override fun onInterrupted() = ui { stopCue() }
+            fun stopCue() {
+                player?.cancel(); player = null
+                cueLine?.let { it.spoken = -1; if (it.text.isNotBlank()) it.text = it.text.trimEnd() + " —" }
+                cueLine = null; spokenChars = 0
+                live = Live.LISTENING
+            }
+            override fun onTurnComplete() = ui {
+                finishTurn()
+                cueLine = null; spokenChars = 0
+                cardVersion++
+            }
+            override fun onCard(card: CallCard) = ui { addCard(card) }
+            override fun onEndRequested() = ui { endRequested = true; if (player == null) lifecycleScope.launch { delay(400); if (player == null) endCall() } }
+            override fun onClosed(reason: String?) = ui {
+                if (!ready.isCompleted) ready.complete(false)
+                else if (phase == Phase.IN_CALL && reason != null) {
+                    CueRuntime.engine.log("live call dropped: $reason")
+                    addLine("cue", "The connection dropped. Call me again in a moment.")
+                    lifecycleScope.launch { delay(1500); endCall() }
+                }
+            }
+        })
+        if (!started) return false
+        val ok = kotlinx.coroutines.withTimeoutOrNull(8_000) { ready.await() } == true
+        if (!ok) { f.duplex?.close(); CueRuntime.engine.log("live call didn't start; going turn by turn"); return false }
+        brainLabel = "Gemini live"
+        phase = Phase.IN_CALL
+        live = Live.THINKING
+        f.duplex?.prompt("(The call just connected. Greet the user by saying this, naturally: \"$opening\")")
+        val debuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        mic = MicStream(onChunk = { if (!typing) f.duplex?.sendAudio(it) }, onLevel = { level = it },
+            cueLevel = { player?.level() ?: 0f },
+            onBargeIn = { runOnUiThread { player?.cancel(); player = null; cueLine?.let { it.spoken = -1; if (it.text.isNotBlank()) it.text = it.text.trimEnd() + " —" }; cueLine = null; spokenChars = 0; live = Live.LISTENING } },
+            dump = if (debuggable) java.io.File(filesDir, "voice/mic.pcm") else null,
+            mode = java.io.File(filesDir, "mic_mode").takeIf { debuggable && it.exists() }?.readText()?.trim() ?: "gated").also { it.start() }
+        // Silence: a gentle check after 20 s, then hang up after another 20 s.
+        var nudged = false
+        while (phase == Phase.IN_CALL) {
+            delay(1000)
+            typedQueue?.let { t -> typedQueue = null; f.duplex?.sendText(t); lastActivity = System.currentTimeMillis(); nudged = false }
+            val quiet = System.currentTimeMillis() - lastActivity
+            if (player != null || live == Live.SPEAKING) continue
+            if (quiet > 20_000 && !nudged) { nudged = true; lastActivity = System.currentTimeMillis(); f.duplex?.prompt("(The user has been quiet for a while. Briefly check whether they are still there.)") }
+            else if (quiet > 20_000 && nudged) { endCall(); break }
+        }
+        return true
+    }
+
+    /** Turn by turn, for the on-device model and the rules: listen, answer, listen. */
+    private suspend fun turnLoop(f: CallFlow, v: VoiceIO) {
+        var silentSince = System.currentTimeMillis()
+        var nudged = false
+        while (phase == Phase.IN_CALL) {
+            live = Live.LISTENING
+            partial = ""
+            val queued = typedQueue.also { typedQueue = null }
+            val listenStart = System.currentTimeMillis()
+            var heardText: String? = null
+            var audio: ShortArray? = null
+            val barged = bargedAudio.also { bargedAudio = null }
+            if (barged != null) audio = barged
+            else if (queued != null) heardText = queued
+            else if (typing) { delay(250); silentSince = System.currentTimeMillis(); continue }
+            else if (f.usingModel && f.hearsAudio) {
+                // The model hears the user's own voice; a quick transcript of it so far is shown while they talk.
+                var previewing = false
+                audio = pcm.record(stop = { typing || typedQueue != null || phase != Phase.IN_CALL }, onLevel = { level = it }, onProgress = { soFar ->
+                    if (!previewing) {
+                        previewing = true
+                        lifecycleScope.launch { f.preview(soFar)?.takeIf { it.isNotBlank() }?.let { if (live == Live.LISTENING) partial = it }; previewing = false }
+                    }
+                })
+                f.cancelPreview()
+            } else heardText = v.listen()
+            if (phase != Phase.IN_CALL) break
+            if (heardText == null && audio == null) {
+                if (typedQueue != null || typing) continue
+                // A recognizer error that comes back instantly is not silence; wait a moment and listen again.
+                if (System.currentTimeMillis() - listenStart < 1500) { delay(600); continue }
+                val quiet = System.currentTimeMillis() - silentSince
+                if (quiet > 22_000 && nudged) { speak(addLine("cue", "I'll let you go. Talk soon.")); endCall(); break }
+                if (quiet > 7_000 && !nudged) { nudged = true; speak(addLine("cue", "Are you there?")) }
+                continue
+            }
+            live = Live.THINKING
+            v.cue()
+            var userLine: Line? = heardText?.let { partial = ""; addLine("user", it) }
+            if (userLine == null && partial.isBlank()) partial = "…"
+            val player = if (f.usingModel) StreamPlayer() else null
+            val barge = player?.let { listenOver(it) }
+            var cueLine: Line? = null
+            var following: Job? = null
+            val listener = object : TurnListener {
+                override fun onHeard(text: String) = runOnUiThread { if (userLine == null) { partial = ""; userLine = addLine("user", text) } }
+                override fun onPartial(text: String) = runOnUiThread {
+                    val line = cueLine ?: addLine("cue", "").also { cueLine = it }
+                    line.text = text
+                }
+                override fun onAudio(pcm: ShortArray) {
+                    val p = player ?: return
+                    if (!p.stopped) live = Live.SPEAKING
+                    p.push(pcm)
+                    if (following == null) runOnUiThread {
+                        if (following == null) {
+                            val line = cueLine ?: addLine("cue", "").also { cueLine = it }
+                            following = follow(line, { p.estimatedChars(line.text.length) }, { p.released })
+                        }
+                    }
+                }
+            }
+            val reply = if (audio != null) f.userAudio(audio, listener) else f.userSaid(heardText!!, listener)
+            partial = ""
+            if (audio != null && reply.heard == null) { player?.cancel(); cueLine?.let { lines.remove(it) }; continue } // a sound with no words
+            silentSince = System.currentTimeMillis()
+            nudged = false
+            val line = (cueLine ?: addLine("cue", reply.spoken)).also { it.text = reply.spoken }
+            reply.card?.let { addCard(it) }
+            cardVersion++
+            if (player != null && reply.streamed) {
+                live = Live.SPEAKING
+                player.markDone()
+                player.finish()
+            } else {
+                player?.cancel()
+                live = Live.SPEAKING
+                voice?.speak(reply.spoken) { end -> line.spoken = end }
+                line.spoken = -1
+            }
+            if (barge != null && afterSpeech(barge)) { line.text = reply.spoken.trimEnd('.', ' ') + " —"; continue }
+            live = Live.IDLE
+            if (reply.endCall) { endCall(); break }
         }
     }
 
     /** Says a fixed line: in the model's own voice when it is on the call, else with the phone's voice. */
-    private suspend fun speak(text: String) {
+    private suspend fun speak(line: Line) {
         live = Live.SPEAKING
         val f = flow
+        val text = line.text
         if (f != null && f.usingModel) {
             val player = StreamPlayer()
             val barge = listenOver(player)
-            val r = f.say(text) { player.push(it) }
-            if (r.streamed) player.finish() else { player.cancel(); voice?.speak(text) }
+            follow(line, { player.estimatedChars(text.length) }, { player.released })
+            val r = f.say(text, object : TurnListener { override fun onAudio(pcm: ShortArray) = player.push(pcm) })
+            player.markDone()
+            if (r.streamed) player.finish() else { player.cancel(); voice?.speak(text) { line.spoken = it }; line.spoken = -1 }
             afterSpeech(barge)
-        } else voice?.speak(text)
+        } else { voice?.speak(text) { line.spoken = it }; line.spoken = -1 }
         live = Live.IDLE
     }
 
@@ -309,23 +489,13 @@ class CallActivity : ComponentActivity() {
         return bargedAudio != null
     }
 
-    private suspend fun refreshList() {
-        val engine = CueRuntime.engine
-        val albumId = flow?.albumId ?: engine.activeAlbum()?.id
-        val lists = engine.dao.itemsOfType(ItemType.CHECKLIST)
-        val item = lists.firstOrNull { it.albumId == albumId && albumId != null } ?: lists.firstOrNull { TextKit.dayKey(it.createdAt, engine.clock.zone) == TextKit.dayKey(engine.clock.now(), engine.clock.zone) }
-        val before = entries.associate { it.id to it.checked }
-        val now = item?.let { engine.dao.entries(it.id) }.orEmpty().sortedBy { it.position }
-        justTicked = now.firstOrNull { it.checked && before[it.id] == false }?.id ?: now.firstOrNull { it.id !in before.keys && before.isNotEmpty() }?.id
-        entries.clear(); entries += now
-        listTitle = item?.title ?: ""
-    }
-
     private fun endCall() {
         if (phase == Phase.ENDED) return
         phase = Phase.ENDED
         voice?.cancelListening()
         voice?.stopSpeaking()
+        mic?.stop(); mic = null
+        callAudio?.release(); callAudio = null
         // Filing runs on the app's scope: leaving the summary screen early must not cancel it.
         val f = flow
         val app = applicationContext
@@ -344,6 +514,7 @@ class CallActivity : ComponentActivity() {
 
     override fun onDestroy() {
         if (phase == Phase.IN_CALL) { phase = Phase.ENDED; CueRuntime.scope.launch { flow?.end() } }
+        mic?.stop(); callAudio?.release()
         voice?.release()
         CallService.stop(this)
         super.onDestroy()
@@ -410,7 +581,8 @@ class CallActivity : ComponentActivity() {
         val bgColor = if (night) Cue.night else Cue.cream
         val fg = if (night) Cue.nightText else Cue.ink
         val listState = rememberLazyListState()
-        LaunchedEffect(lines.size, partial) { if (lines.isNotEmpty()) listState.animateScrollToItem(lines.size) }
+        val tail = lines.lastOrNull()?.text?.length ?: 0
+        LaunchedEffect(lines.size, partial, tail / 40) { if (lines.isNotEmpty()) listState.animateScrollToItem(lines.size) }
         Column(
             Modifier.fillMaxSize().background(bgColor).drawBehind {
                 drawRect(Brush.radialGradient(listOf(if (night) Cue.tealLight.copy(alpha = 0.35f) else Color(0xFFFFDCC8), Color.Transparent), center = Offset(size.width / 2, 0f), radius = size.width * 1.1f))
@@ -432,9 +604,11 @@ class CallActivity : ComponentActivity() {
                 Wave(live == Live.LISTENING, level)
             }
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 14.dp)) {
-                items(lines) { (who, t) -> Bubble(who == "user", t) }
+                items(lines) { l ->
+                    if (l.card != null) CallCardView(l.card, cardVersion, night)
+                    else if (l.text.isNotBlank()) Bubble(l.who == "user", l.text, spoken = l.spoken)
+                }
                 if (partial.isNotBlank()) item { Bubble(true, partial, faded = true) }
-                if (entries.isNotEmpty() && kind != ReminderKind.PRACTICE) item { ListCard() }
             }
             if (typing) TypeBar()
             Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -464,39 +638,38 @@ class CallActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * A line of the conversation. While Cue speaks it, the words already heard are solid, the word being said now is
+     * marked, and the rest is faded, so the text follows the voice.
+     */
     @Composable
-    private fun Bubble(user: Boolean, text: String, faded: Boolean = false) {
+    private fun Bubble(user: Boolean, text: String, faded: Boolean = false, spoken: Int = -1) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = if (user) Arrangement.End else Arrangement.Start) {
             val shape = if (user) RoundedCornerShape(24.dp, 24.dp, 8.dp, 24.dp) else RoundedCornerShape(24.dp, 24.dp, 24.dp, 8.dp)
+            val ink = if (user) Color.White.copy(alpha = if (faded) 0.7f else 1f) else if (night) Cue.nightText else Cue.ink
             Box(
                 Modifier.widthIn(max = 290.dp)
                     .shadow(if (faded) 0.dp else 10.dp, shape, spotColor = if (user) Cue.tealDeep.copy(alpha = 0.5f) else Color.Black.copy(alpha = 0.18f))
                     .clip(shape)
                     .background(if (user) Cue.tealBrush else Brush.linearGradient(listOf(if (night) Color(0xFF1A2D2D) else Color.White, if (night) Color(0xFF1A2D2D) else Color.White)))
                     .padding(horizontal = 18.dp, vertical = 13.dp),
-            ) { Txt(text, Type.body, if (user) Color.White.copy(alpha = if (faded) 0.7f else 1f) else if (night) Cue.nightText else Cue.ink) }
+            ) {
+                if (user || spoken < 0) Txt(text, Type.body, ink)
+                else Text(highlighted(text, spoken, ink), style = Type.body)
+            }
         }
     }
 
-    @Composable
-    private fun ListCard() {
-        Column(
-            Modifier.fillMaxWidth().padding(top = 6.dp).shadow(14.dp, RoundedCornerShape(28.dp), spotColor = Color(0xFF33408C).copy(alpha = 0.35f)).clip(RoundedCornerShape(28.dp))
-                .background(if (night) Color(0xFF142626) else Color.White).padding(6.dp),
-        ) {
-            Row(Modifier.fillMaxWidth().height(46.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(30.dp).clip(RoundedCornerShape(10.dp)).background(Cue.tealBrush), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Rounded.Check, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                }
-                Spacer(Modifier.width(10.dp))
-                Txt(listTitle.ifBlank { "List" }, Type.bodyStrong, if (night) Cue.nightText else Cue.ink, Modifier.weight(1f))
-                if (justTicked != null) Pill("Just updated", Cue.coralTint, Cue.coralText)
-            }
-            entries.forEach { e ->
-                CheckRow(e.text, e.checked, onToggle = {
-                    lifecycleScope.launch { CueRuntime.engine.dao.updateEntry(e.copy(checked = !e.checked)); refreshList() }
-                }, dark = night, highlight = e.id == justTicked)
-            }
+    private fun highlighted(text: String, spoken: Int, ink: Color): androidx.compose.ui.text.AnnotatedString {
+        val at = spoken.coerceIn(0, text.length)
+        val wordStart = text.lastIndexOf(' ', (at - 1).coerceAtLeast(0)).let { if (it < 0) 0 else it + 1 }.coerceAtMost(at)
+        val wordEnd = text.indexOf(' ', at).let { if (it < 0) text.length else it }
+        val mark = if (night) Cue.apricot else Cue.coralText
+        return androidx.compose.ui.text.buildAnnotatedString {
+            withStyle(androidx.compose.ui.text.SpanStyle(color = ink)) { append(text.substring(0, wordStart)) }
+            withStyle(androidx.compose.ui.text.SpanStyle(color = mark, fontWeight = androidx.compose.ui.text.font.FontWeight(800),
+                background = mark.copy(alpha = 0.14f))) { append(text.substring(wordStart, wordEnd)) }
+            withStyle(androidx.compose.ui.text.SpanStyle(color = ink.copy(alpha = 0.38f))) { append(text.substring(wordEnd)) }
         }
     }
 

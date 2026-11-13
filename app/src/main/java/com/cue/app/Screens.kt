@@ -730,19 +730,29 @@ fun PracticeScreen(a: MainActivity, nav: Nav) {
 
 @Composable
 fun FocusScreen(a: MainActivity, nav: Nav) {
-    var left by remember { mutableIntStateOf(25 * 60) }
-    var running by remember { mutableStateOf(false) }
-    LaunchedEffect(running) { while (running && left > 0) { delay(1000); left-- }; if (left == 0) { running = false; a.cue.engine.surfaces.notify("Focus done", "25 minutes. Take a short break.", "focus") } }
+    // The session is saved (a quiet reminder), so one started by voice on a call shows here too, and the other way round.
+    val engine = a.cue.engine
+    val scope = rememberCoroutineScope()
+    val reminders by engine.dao.scheduledRemindersFlow().collectAsState(emptyList())
+    val session = reminders.firstOrNull { it.kind == com.cue.domain.ReminderKind.FOCUS && it.fireAt > System.currentTimeMillis() }
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(session?.id) { while (session != null) { now = System.currentTimeMillis(); delay(1000) } }
+    val left = if (session != null) ((session.fireAt - now) / 1000).coerceAtLeast(0) else 25 * 60L
+    val what = session?.let { org.json.JSONObject(it.meta).optString("what", "Focus") }
+    fun run(tool: String) = scope.launch {
+        com.cue.agent.CueToolExecutor(engine, com.cue.agent.CallContext(null, "TALK", null, null))
+            .execute(com.cue.brain.ToolCall(tool, if (tool == "focus_start") mapOf("minutes" to "25") else emptyMap()))
+    }
     Page(glowA = Color(0xFFE4DCF7)) {
-        item { BackHeader("Focus", "A timer I can start when you ask", { nav.back() }, glow = AppTints.focus.deep) }
+        item { BackHeader("Focus", "Or say \"focus for 40 minutes on the deck\" on a call", { nav.back() }, glow = AppTints.focus.deep) }
         item {
             GradientCard(Brush.linearGradient(listOf(AppTints.focus.light, AppTints.focus.deep, Color(0xFF4A2FA0))), AppTints.focus.deep, Modifier.fillMaxWidth()) {
                 Txt("%d:%02d".format(left / 60, left % 60), Type.big.copy(fontSize = sp(72f), lineHeight = sp(76f)), Color.White)
-                Txt(if (running) "Stay with it" else "Ready when you are", Type.body, Color.White.copy(alpha = 0.85f))
+                Txt(if (session != null) "Stay with it · $what" else "Ready when you are", Type.body, Color.White.copy(alpha = 0.85f))
                 Spacer(Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    PrimaryButton(if (running) "Pause" else "Start", Modifier.weight(1f), brush = Brush.verticalGradient(listOf(Color.White, Color(0xFFF1ECFF))), shadow = AppTints.focus.deep, textColor = AppTints.focus.text) { running = !running }
-                    SoftButton("Reset", Modifier.weight(1f), color = Color.White.copy(alpha = 0.25f), textColor = Color.White, height = 58.dp) { running = false; left = 25 * 60 }
+                    PrimaryButton(if (session != null) "Stop" else "Start 25 min", Modifier.weight(1f), brush = Brush.verticalGradient(listOf(Color.White, Color(0xFFF1ECFF))),
+                        shadow = AppTints.focus.deep, textColor = AppTints.focus.text) { run(if (session != null) "focus_stop" else "focus_start") }
                 }
             }
         }
