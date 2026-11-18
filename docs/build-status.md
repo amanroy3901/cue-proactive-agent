@@ -72,6 +72,24 @@ Every row below was run on the device and its log or screenshot checked. "Typed"
 | Barge-in | Cue read a 19 s answer with nobody talking and did not interrupt itself; then "Wait, stop. What time is my flight?" said over an answer stopped the speech and the model within about 0.3 s, and the model answered "Your flight to Delhi is at six PM tomorrow" | Speech played from the Mac |
 | Unit tests | 19 JVM tests for phrase parsing, time parsing, ticket/bill/prescription extraction, people parsing and situation rules, all passing | `./gradlew :agent:test :brain:rules:test` |
 
+## The guided demo (Nov 18)
+
+Ask Cue → **▶ Run the full demo** (or **▶ Demo** in the header) runs the whole story in one screen. It loads the demo week, turns the Delhi trip into a full Space (budget ₹25,000, split with Riya), and shows a "Demo · next" button above the input box. The 12 steps:
+1. Morning call
+2. What the call changed
+3. A dinner bill filed into the trip as an expense
+4. "What's left to pack?" (Gemini screen)
+5. Plan the wedding by questions
+6. A photo for the wedding
+7. Airport bubble
+8. Rahul's WhatsApp bubble
+9. Medicine call
+10. Night call
+11. "What do you know about me?" with a week-at-a-glance screen
+12. Finish
+
+Results show in the chat as screens Cue composes from its own components. Calls and bubbles open over the chat and come back to it. The button hides while planning questions are open. Steps live in `AskSession.tourSteps` (`app/Ask.kt`); demo images are drawn on the phone (`Demo.drawPicture`). Run twice on the emulator from empty data.
+
 ## A small build to share (Nov 18)
 
 `./gradlew :app:assembleDemo` builds `app/build/outputs/apk/demo/app-demo.apk`, about 19 MB instead of 88 MB. It behaves like debug (same signing, so it installs over a debug build and keeps the data; shows over the lock screen; debug panel), with R8 code shrinking, unused resources removed and compressed code. Keep rules are in `app/proguard-rules.pro`. The Gemini key is built in, so share it privately only. Tested on the emulator: launch, Ask Cue with a generated screen, the share sheet, a Space.

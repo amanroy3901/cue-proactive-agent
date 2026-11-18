@@ -172,10 +172,12 @@ class Spaces(private val env: AgentEnv) {
         val budget = base.blocks.firstOrNull { it.type == BlockType.EXPENSES }?.budget
         val g = goal.lowercase(Locale.ROOT)
         // Models fill gaps with guesses ("Parents", today's date). Keep only names the user actually said.
-        fun said(names: List<String>) = names.filter { n -> Regex("\\b${Regex.escape(n.lowercase(Locale.ROOT))}\\b").containsMatchIn(g) }
+        // A name counts only if the user wrote it as a name: "Riya" yes, "my sister's wedding" doesn't make "Sister" a person.
+        fun said(names: List<String>) = names.filter { n -> n.firstOrNull()?.isUpperCase() == true && Regex("\\b${Regex.escape(n)}\\b").containsMatchIn(goal) }
         val blocks = model.blocks.map { b ->
             when (b.type) {
-                BlockType.EXPENSES -> b.copy(people = (said(b.people) + people).distinctBy { it.lowercase(Locale.ROOT) }, budget = budget ?: b.budget)
+                // ...and a budget only if the user named one (code reads it from their words).
+                BlockType.EXPENSES -> b.copy(people = (said(b.people) + people).distinctBy { it.lowercase(Locale.ROOT) }, budget = budget)
                 BlockType.PEOPLE -> b.copy(people = (said(b.people) + people).distinctBy { it.lowercase(Locale.ROOT) })
                 else -> b
             }
