@@ -180,7 +180,11 @@ class CallActivity : ComponentActivity() {
     /** What Cue has put on screen this call: the live panel's tabs, newest selected. */
     private val panel = mutableStateListOf<CallCard>()
     private var panelAt by mutableStateOf(0)
-    private var panelOpen by mutableStateOf(true)
+    private var panelOpen by mutableStateOf(false)
+    /** The card that changed last, and when: the rail pulses it and a note says so. */
+    private var updatedAt by mutableStateOf(0)
+    private var updateStamp by mutableStateOf(0L)
+    private var addedNew by mutableStateOf(false)
     private var showTranscript by mutableStateOf(false)
     /** What Cue just did ("Ticked off · Charger"), shown briefly under the captions. */
     private val acts = mutableStateListOf<Act>()
@@ -264,8 +268,8 @@ class CallActivity : ComponentActivity() {
     /** Shows a card in the conversation; the same card asked for again moves down to the latest place. */
     private fun addCard(card: CallCard) {
         val at = panel.indexOfFirst { sameCard(it, card) }
-        if (at >= 0) { panel[at] = card; panelAt = at } else { panel += card; panelAt = panel.lastIndex }
-        panelOpen = true
+        if (at >= 0) { panel[at] = card; updatedAt = at; addedNew = false } else { panel += card; updatedAt = panel.lastIndex; panelAt = updatedAt; addedNew = true }
+        updateStamp = System.currentTimeMillis()
         cardVersion++
         syncActs()
         action = pixelMoodForTool(card::class.simpleName.orEmpty().lowercase())
@@ -352,7 +356,10 @@ class CallActivity : ComponentActivity() {
                 lastActivity = System.currentTimeMillis()
                 if (final) { partial = ""; addLine("user", text) } else { partial = text; live = Live.LISTENING }
             }
-            override fun onModelText(delta: String) = ui {
+            override fun onModelText(raw: String) = ui {
+                // Cue speaks English: drop stray Greek or Cyrillic the transcript sometimes picks up from noise.
+                val delta = raw.replace(Regex("[\\p{IsGreek}\\p{IsCyrillic}]+[-\\p{IsGreek}\\p{IsCyrillic}]*"), "")
+                if (delta.isEmpty()) return@ui
                 val line = cueLine ?: addLine("cue", "").also { cueLine = it }
                 line.text += delta
                 spokenChars += delta.length
@@ -679,9 +686,6 @@ class CallActivity : ComponentActivity() {
     @Composable
     private fun InCall() {
         var orb by remember { mutableStateOf(Offset.Unspecified) }
-        val hasPanel = panel.isNotEmpty()
-        val compact = hasPanel && panelOpen || typing
-        val orbSize by androidx.compose.animation.core.animateDpAsState(if (compact) 128.dp else if (hasPanel) 200.dp else 250.dp, androidx.compose.animation.core.tween(500), label = "orb")
         LaunchedEffect(actionStamp) { if (action != null) { delay(2200); action = null } }
         val mood = action ?: when (phase) {
             Phase.CONNECTING -> PixelMood.Connecting
@@ -689,9 +693,16 @@ class CallActivity : ComponentActivity() {
         }
         val talking = phase == Phase.IN_CALL && (live == Live.SPEAKING || (live == Live.LISTENING && level > 0.08f))
         val spoken = lines.filter { it.card == null && it.text.isNotBlank() }
-        val current = spoken.lastOrNull()
-        val previous = spoken.getOrNull(spoken.size - 2)
         StageBackdrop(level, talking, night, orb) {
+            // Cue, as big as the screen allows, always: nothing else takes its place.
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+                val size = minOf(maxWidth * 1.0f, maxHeight * 0.6f)
+                Box(Modifier.align(Alignment.TopCenter).padding(top = 56.dp).size(size).onGloballyPositioned { c ->
+                    val p = c.positionInRoot(); orb = Offset(p.x + c.size.width / 2f, p.y + c.size.height / 2f)
+                }, contentAlignment = Alignment.Center) { Pixel(mood, size, level = level) }
+            }
+            // A soft dark floor so the words read over Cue.
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color.Transparent, 0.45f to Color.Transparent, 0.75f to Stage.deep.copy(alpha = 0.75f), 1f to Stage.deep.copy(alpha = 0.95f))))
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -702,22 +713,13 @@ class CallActivity : ComponentActivity() {
                     }
                     GlassButton(Icons.AutoMirrored.Rounded.Notes, "Transcript", active = showTranscript, size = 44.dp) { showTranscript = !showTranscript }
                 }
-                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                        Box(Modifier.size(orbSize).onGloballyPositioned { c ->
-                            val p = c.positionInRoot(); orb = Offset(p.x + c.size.width / 2f, p.y + c.size.height / 2f)
-                        }, contentAlignment = Alignment.Center) { Pixel(mood, orbSize, level = level) }
-                        Spacer(Modifier.height(if (compact) 8.dp else 20.dp))
-                        Captions(previous, current, partial, compact = compact)
-                        Spacer(Modifier.height(12.dp))
-                        var tick by remember { mutableStateOf(System.nanoTime()) }
-                        LaunchedEffect(Unit) { while (true) { delay(1000); tick = System.nanoTime() } }
-                        ActivityTicker(acts.filter { tick - it.stamp < 6_000_000_000L }.takeLast(2))
-                    }
-                }
-                val ime = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
-                if (hasPanel) LivePanel(panel.toList(), panelAt.coerceIn(0, panel.lastIndex), panelOpen && !ime, cardVersion, onSelect = { panelAt = it; panelOpen = true }, onToggle = { panelOpen = !panelOpen })
-                if (typing) Box(Modifier.padding(horizontal = 16.dp).padding(top = 10.dp)) { TypeBar() }
+                Spacer(Modifier.weight(1f))
+                var tick by remember { mutableStateOf(System.nanoTime()) }
+                LaunchedEffect(Unit) { while (true) { delay(1000); tick = System.nanoTime() } }
+                ActivityTicker(acts.filter { tick - it.stamp < 6_000_000_000L }.takeLast(2))
+                Spacer(Modifier.height(10.dp))
+                ConversationOverlay(spoken, partial, maxHeight = if (typing) 180.dp else 280.dp)
+                if (typing) Box(Modifier.padding(horizontal = 16.dp).padding(top = 12.dp)) { TypeBar() }
                 Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     GlassButton(Icons.AutoMirrored.Rounded.VolumeUp, if (voice?.speakerOn != false) "Speaker on" else "Speaker off", active = voice?.speakerOn != false) { voice?.let { it.speakerOn = !it.speakerOn } }
                     GlassButton(Icons.Rounded.AddPhotoAlternate, "Add photo") {
@@ -736,6 +738,14 @@ class CallActivity : ComponentActivity() {
                     }
                 }
             }
+            // The board's handle and the "updated" note, on the right edge, out of the conversation's way.
+            if (panel.isNotEmpty()) Box(Modifier.fillMaxSize().statusBarsPadding().padding(top = 96.dp), contentAlignment = Alignment.TopEnd) {
+                Row(verticalAlignment = Alignment.Top) {
+                    BoardPeek(panel.getOrNull(updatedAt), updateStamp, addedNew, onOpen = { panelAt = updatedAt; panelOpen = true }, modifier = Modifier.padding(top = 10.dp, end = 8.dp))
+                    BoardRail(panel.toList(), updatedAt, updateStamp, onOpen = { panelAt = it; panelOpen = true })
+                }
+            }
+            BoardDrawer(panelOpen, panel.toList(), panelAt, cardVersion, onSelect = { panelAt = it }, onClose = { panelOpen = false })
             if (showTranscript) Transcript()
         }
     }
