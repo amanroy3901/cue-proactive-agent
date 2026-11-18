@@ -47,6 +47,19 @@ data class Extracted(
  * bills with warranties and vehicle papers in OCR text or a shared file's text.
  */
 object FastFields {
+    /**
+     * A money figure as printed or as OCR read it, made plain: "1,200.00", "1.200.00", "1,20,000" and "1.200" all
+     * mean what an Indian receipt means. Separators followed by three digits group thousands; one or two digits at
+     * the end are paise.
+     */
+    fun amount(raw: String): String? {
+        val groups = raw.trim().split(',', '.').filter { it.isNotEmpty() }
+        if (groups.isEmpty() || groups.any { g -> g.any { !it.isDigit() } }) return null
+        val last = groups.last()
+        val (whole, paise) = if (groups.size > 1 && last.length in 1..2) groups.dropLast(1).joinToString("") to last else groups.joinToString("") to ""
+        return whole.trimStart('0').ifEmpty { "0" } + if (paise.isNotEmpty()) ".$paise" else ""
+    }
+
     fun extract(raw: String, now: Long, zone: ZoneId, fileName: String = ""): Extracted {
         val text = raw.replace('\n', ' ').replace(Regex("\\s+"), " ")
         val lower = (text + " " + fileName).lowercase(Locale.ROOT)
@@ -115,7 +128,10 @@ object FastFields {
                 "microwave" to "Microwave", "electricity" to "Electricity", "water purifier" to "Water purifier")
                 .firstOrNull { lower.contains(it.first) }?.second
             product?.let { fields["product"] = it }
-            Regex("(?i)(?:total|amount|rs\\.?|₹|inr)\\s*[:₹]?\\s*([\\d,]+(?:\\.\\d{2})?)").find(text)?.let { fields["amount"] = it.groupValues[1] }
+            // The total line first; any other money figure only if there is none. OCR often reads 1,200.00 as 1.200.00.
+            val num = "\\s*[:₹]?\\s*(?:rs\\.?|₹|inr)?\\s*(\\d[\\d,.]*\\d|\\d)"
+            (Regex("(?i)\\b(?:grand total|total amount|net amount|amount payable|total)$num").findAll(text).lastOrNull()
+                ?: Regex("(?i)(?:\\brs\\.?|₹|\\binr\\b|\\bamount\\b)$num").find(text))?.let { m -> amount(m.groupValues[1])?.let { fields["amount"] = it } }
             val warranty = Regex("(?i)(\\d+|one|two|three|five)\\s*(year|yr|month)s?\\s*(?:comprehensive\\s*)?warranty").find(text)
                 ?: Regex("(?i)warranty[:\\s]*(\\d+|one|two|three|five)\\s*(year|yr|month)").find(text)
             var exp: Long? = null
@@ -131,7 +147,12 @@ object FastFields {
                 val due = Regex("(?i)due date[:\\s]*([\\w ,/-]{6,14})").find(text)?.let { TextKit.parseDate(it.groupValues[1], now, zone) }
                 return Extracted(ItemKind.BILL, "Electricity bill", fields, eventStart = due?.let { TextKit.at(it, 10 * 60, zone) }, placeKind = PlaceKind.HOME)
             }
-            return Extracted(ItemKind.BILL, (product?.let { "$it bill" } ?: "Bill"), fields, expiresAt = exp)
+            // A receipt starts with the shop's name: "BAGA BEACH SHACK" → "Baga Beach Shack bill".
+            val shop = if (product != null) null else raw.lines().map { it.trim() }.firstOrNull { it.isNotEmpty() }
+                ?.takeIf { l -> l.length in 3..32 && l.count { it.isLetter() } >= l.length * 0.7 && !Regex("(?i)invoice|bill|receipt|gst|tax").containsMatchIn(l) }
+                ?.split(Regex("\\s+"))?.joinToString(" ") { w -> w.lowercase(Locale.ROOT).replaceFirstChar { it.uppercase() } }
+            shop?.let { fields["shop"] = it }
+            return Extracted(ItemKind.BILL, product?.let { "$it bill" } ?: shop?.let { "$it bill" } ?: "Bill", fields, expiresAt = exp)
         }
         if (has("cafe", "café", "restaurant", "bistro", "menu", "coffee")) {
             val name = Regex("([A-Z][\\w'&]+(?:\\s[A-Z][\\w'&]+){0,3})\\s*(?:Cafe|Café|Restaurant|Bistro|Coffee)").find(text)?.value

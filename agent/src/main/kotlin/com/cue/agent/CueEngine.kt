@@ -51,6 +51,8 @@ class CueEngine(
     override val planner = Planner(dao, clock, settings, scheduler)
     val assigner = AlbumAssigner(dao, clock)
     val briefings = Briefings(this)
+    /** Photos, files and shared text from chat, calls and other apps: filed into the right space. */
+    val inbox = Inbox(this) { text, path, source, hash, name, into -> ingestDocument(text, path, source, hash, name, into, quiet = true) }
     private val mutex = Mutex()
     private val _log = MutableStateFlow<List<String>>(emptyList())
     val logLines: StateFlow<List<String>> = _log
@@ -342,7 +344,7 @@ class CueEngine(
     }
 
     /** Phase one of ingest: read fields with plain code, file into an album, plan triggers. Returns the item. */
-    suspend fun ingestDocument(text: String, mediaPath: String?, source: String, hash: String?, fileName: String = "", intoAlbum: Long? = null): Item? = mutex.withLock {
+    suspend fun ingestDocument(text: String, mediaPath: String?, source: String, hash: String?, fileName: String = "", intoAlbum: Long? = null, quiet: Boolean = false): Item? = mutex.withLock {
         if (hash != null) dao.itemByHash(hash)?.let { log("duplicate $source ignored"); return@withLock null }
         val now = clock.now()
         val ex = FastFields.extract(text, now, clock.zone, fileName)
@@ -356,7 +358,7 @@ class CueEngine(
             }
             if (same != null) {
                 record(if (source == "share") TriggerKind.SHARE else TriggerKind.SCREENSHOT, same.id, "doc:${hash ?: now}")?.let { decided(it, "SILENT", "already have this ticket (${ex.fields["pnr"] ?: ex.fields["flight"]}); kept the existing one") }
-                if (source == "share") surfaces.toast("Already saved in ${same.albumId?.let { dao.album(it)?.title } ?: "your trip"}")
+                if (source == "share" && !quiet) surfaces.toast("Already saved in ${same.albumId?.let { dao.album(it)?.title } ?: "your trip"}")
                 return@withLock same
             }
         }
@@ -376,7 +378,7 @@ class CueEngine(
         record(if (source == "share") TriggerKind.SHARE else TriggerKind.SCREENSHOT, id, "doc:${hash ?: id}")?.let {
             decided(it, "SILENT", "filed ${ex.kind} '${ex.title}'" + (albumId?.let { a -> " to ${dao.album(a)?.title}" } ?: "") + "; $summary")
         }
-        if (source == "share") surfaces.toast("Saved" + (albumId?.let { " to ${dao.album(it)?.title}" } ?: ""))
+        if (source == "share" && !quiet) surfaces.toast("Saved" + (albumId?.let { " to ${dao.album(it)?.title}" } ?: ""))
         item
     }
 

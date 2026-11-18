@@ -121,6 +121,8 @@ class WorkflowTest {
             "insertRecord" -> { val id = s.nextId++; s.records += (a[0] as com.cue.domain.BlockRecord).copy(id = id); id }
             "records" -> s.records.filter { it.blockId == a[0] }.sortedBy { it.at }
             "deleteRecords" -> { s.records.removeAll { it.blockId == a[0] }; Unit }
+            "deleteRecord" -> { s.records.removeAll { it.id == a[0] }; Unit }
+            "itemByHash" -> s.items.firstOrNull { it.contentHash == a[0] }
             "insertEntry" -> { val id = s.nextId++; s.entries += (a[0] as com.cue.domain.ChecklistEntry).copy(id = id); id }
             "entries" -> s.entries.filter { it.itemId == a[0] }
             "itemsInAlbum" -> s.items.filter { it.albumId == a[0] }
@@ -341,5 +343,107 @@ class WorkflowTest {
         val stop = x.execute(ToolCall("itinerary_add", mapOf("what" to "Check in at Taj", "when" to "20 Nov 2 pm")))
         assertTrue(stop.message, stop.ok && stop.message.contains("Nov 20") && stop.message.contains("2 PM"))
         assertTrue(x.execute(ToolCall("expense_add", mapOf("what" to "snacks"))).message.startsWith("NEEDS amount"))
+    }
+
+    // ------------------------------------------------------------------ inbox and planning talk
+
+    /** An inbox over the fake store; the "engine" saves the item into whatever space it is told (none = unfiled). */
+    private fun inbox(s: Store, time: Long = now): Inbox {
+        val e = env(s, time)
+        return Inbox(e) { text, path, source, hash, name, into ->
+            val ex = FastFields.extract(text, time, zone, name)
+            val item = Item(type = "GALLERY", kind = ex.kind, title = ex.title, body = text, fields = org.json.JSONObject(ex.fields as Map<*, *>).toString(),
+                eventStart = ex.eventStart, mediaPath = path, source = source, contentHash = hash, albumId = into, createdAt = time)
+            val id = e.dao.insertItem(item); item.copy(id = id)
+        }
+    }
+
+    @Test fun billDuringATripGoesToItsExpensesAndCanBeUndone() = runTest {
+        val s = Store()
+        val x = exec(s)
+        // Goa trip happening now (Nov 13), and an older Home bills space.
+        s.albums += Album(id = 900, title = "Home bills", kind = "ADMIN", createdAt = now)
+        x.execute(ToolCall("space_create", mapOf("goal" to "Goa trip today with Riya for 3 days", "confirm" to "yes")))
+        val goa = s.albums.first { it.title.startsWith("Goa") }
+        val f = inbox(s).file("TAJ HOLIDAY VILLAGE\nTax invoice\nTotal Rs 4,200.00", "/p/bill.jpg", "chat", "h1", "bill.jpg", photo = true)
+        assertTrue(f.message(), f.sure && f.album?.id == goa.id && f.amount == 4200L)
+        assertTrue(f.message(), f.message().contains("Goa") && f.message().contains("₹4,200"))
+        assertEquals(1, s.records.size)
+        // Undo takes back both the paper and the expense.
+        inbox(s).undo(f)
+        assertTrue(s.records.isEmpty() && s.items.none { it.contentHash == "h1" })
+    }
+
+    @Test fun whatTheUserSaysWinsAndUnsureAsks() = runTest {
+        val s = Store()
+        s.albums += Album(id = 1, title = "Goa trip", kind = "TRIP", startAt = at(2026, 11, 20, 9, 0), endAt = at(2026, 11, 22, 21, 0), createdAt = now)
+        s.albums += Album(id = 2, title = "Priya's wedding", kind = "EVENT", startAt = at(2026, 12, 10, 9, 0), createdAt = now)
+        // A plain photo with a hint names the space: filed there as a photo.
+        val p = inbox(s).file("", "/p/a.jpg", "chat", "h2", "a.jpg", hint = "for the wedding", photo = true)
+        assertTrue(p.message(), p.sure && p.album?.id == 2L && p.item?.kind == "photo")
+        // Same photo again: Cue says it already has it.
+        assertTrue(inbox(s).file("", "/p/a.jpg", "chat", "h2", "a.jpg", photo = true).duplicate)
+        // No hint, no dates, no names: saved, and Cue asks where, offering the spaces.
+        val q = inbox(s).file("", "/p/b.jpg", "chat", "h3", "b.jpg", photo = true)
+        assertFalse(q.sure); assertTrue(q.message(), q.message().contains("Where should it go"))
+        // The conversation's space is enough to be sure.
+        val c = inbox(s).file("", "/p/c.jpg", "chat", "h4", "c.jpg", contextAlbum = 1, photo = true)
+        assertTrue(c.sure && c.album?.id == 1L)
+        // The conversation's space beats a space that is merely happening today.
+        s.albums += Album(id = 3, title = "Office offsite", kind = "EVENT", startAt = at(2026, 11, 13, 9, 0), endAt = at(2026, 11, 13, 18, 0), createdAt = now)
+        val d = inbox(s).file("", "/p/d.jpg", "chat", "h5", "d.jpg", contextAlbum = 2, photo = true)
+        assertTrue(d.message(), d.sure && d.album?.id == 2L)
+        // Moving files it where the user said.
+        val m = inbox(s).move(q, 1)
+        assertTrue(m.sure && s.items.first { it.contentHash == "h3" }.albumId == 1L)
+        assertTrue(Inbox.isOnlyFilingHint("add to goa trip") && Inbox.isOnlyFilingHint("") && !Inbox.isOnlyFilingHint("how much did we spend?"))
+    }
+
+    @Test fun planningAsksOnlyWhatItNeeds() {
+        val sp = Spaces(env(Store()))
+        assertTrue(PlanTalk.isPlanning("I'm planning my sister's wedding") && PlanTalk.isPlanning("help me plan a kitchen renovation") && PlanTalk.isPlanning("make a space for exam prep"))
+        assertFalse(PlanTalk.isPlanning("what's on my list today") || PlanTalk.isPlanning("remind me to plan later"))
+        // Nothing said: when, who, what to track.
+        val bare = sp.fromTemplate("Kitchen renovation")
+        assertEquals(listOf("when", "who", "track"), PlanTalk.ruleQuestions("Kitchen renovation", bare).map { it.key })
+        // Date and people already said: only what to track.
+        val goa = sp.fromTemplate("Goa trip next Friday with Riya")
+        assertEquals(listOf("track"), PlanTalk.ruleQuestions("Goa trip next Friday with Riya", goa).map { it.key })
+        // Answers fold back into words the planner reads.
+        val qs = PlanTalk.ruleQuestions("Kitchen renovation", bare)
+        val goal = PlanTalk.enrich("Kitchen renovation", listOf(qs[0] to "Next week", qs[1] to "Riya and Sam"))
+        val answers = listOf(qs[0] to "Next week", qs[1] to "Riya and Sam")
+        val spec = PlanTalk.applyNeeds(sp.fromTemplate(goal), listOf("Money", "To-dos", "Photos"), PlanTalk.peopleIn(answers))
+        assertTrue(spec.start != null)
+        assertTrue(spec.blocks.any { it.type == "expenses" && it.people == listOf("Riya", "Sam") })
+        assertTrue(spec.blocks.any { it.type == "checklist" } && spec.blocks.any { it.type == "gallery" })
+        assertFalse(spec.blocks.any { it.type == "documents" || it.type == "notes" })
+        // A model's questions are cleaned; one about tracking is dropped (Cue asks that itself).
+        val mq = PlanTalk.parseQuestions("""{"questions":[{"key":"host","ask":"Hosting or attending?","options":["Hosting","Attending"]},{"ask":"What should I keep track of?","options":["a","b"]},{"ask":"x","options":["only one"]}]}""")
+        assertEquals(listOf("Hosting or attending?"), mq.map { it.ask })
+    }
+
+    @Test fun spaceSummaryInOneLine() = runTest {
+        val s = Store()
+        val x = exec(s)
+        x.execute(ToolCall("space_create", mapOf("goal" to "Goa trip on 20 Nov with Riya for 3 days, budget 20000", "confirm" to "yes")))
+        val goa = s.albums.single()
+        x.execute(ToolCall("expense_add", mapOf("amount" to "18000", "what" to "hotel")))
+        x.execute(ToolCall("expense_add", mapOf("amount" to "1200", "what" to "dinner", "paid_by" to "Riya")))
+        x.execute(ToolCall("itinerary_add", mapOf("what" to "Check in at Taj", "when" to "21 Nov 2 pm")))
+        val line = Spaces.summary(goa, s.blocks.filter { it.albumId == goa.id }, s.records.toList(), s.entries.toList(), now, zone)
+        assertTrue(line, line.startsWith("In 7 days") && line.contains("₹19,200 of ₹20,000 spent") && line.contains("Riya owes you ₹8,400"))
+        assertTrue(line, line.contains("Next: Check in at Taj") && line.contains("left on To pack"))
+    }
+
+    @Test fun billAmountsAsOcrReadsThem() {
+        assertEquals("1200.00", FastFields.amount("1.200.00"))
+        assertEquals("1200.00", FastFields.amount("1,200.00"))
+        assertEquals("120000", FastFields.amount("1,20,000"))
+        assertEquals("1200", FastFields.amount("1.200"))
+        assertEquals("12.5", FastFields.amount("12.5"))
+        val ex = FastFields.extract("BAGA BEACH SHACK\nTax Invoice\n2x Fish thali 900\n2x Lime soda 300\nTotal Rs 1.200.00\nThank you!", now, zone)
+        assertEquals("bill", ex.kind); assertEquals("1200.00", ex.fields["amount"]); assertEquals("Baga Beach Shack bill", ex.title)
+        assertEquals(1200L, Spaces.parseAmount(ex.fields["amount"]!!))
     }
 }

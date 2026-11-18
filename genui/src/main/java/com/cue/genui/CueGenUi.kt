@@ -3,7 +3,7 @@ package com.cue.genui
 import android.content.Context
 import android.util.Log
 import androidx.a2ui.compose.runtime.A2uiMessageParser
-import androidx.a2ui.compose.runtime.A2uiMessageProcessor
+import androidx.a2ui.compose.ui.A2uiMessageProcessor
 import androidx.a2ui.compose.ui.A2uiCatalog
 import androidx.a2ui.compose.ui.toJsonSchemaString
 import androidx.a2ui.model.catalog.basiccatalog.createBasicCatalogFunctions

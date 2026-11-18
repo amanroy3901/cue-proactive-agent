@@ -72,6 +72,15 @@ Every row below was run on the device and its log or screenshot checked. "Typed"
 | Barge-in | Cue read a 19 s answer with nobody talking and did not interrupt itself; then "Wait, stop. What time is my flight?" said over an answer stopped the speech and the model within about 0.3 s, and the model answered "Your flight to Delhi is at six PM tomorrow" | Speech played from the Mac |
 | Unit tests | 19 JVM tests for phrase parsing, time parsing, ticket/bill/prescription extraction, people parsing and situation rules, all passing | `./gradlew :agent:test :brain:rules:test` |
 
+## Less friction: one way in for files, planning as a conversation (Nov 18)
+
+- **Inbox** (`agent/Inbox.kt`): every photo, file or shared text, whether it comes from chat, a call or another app's share sheet, is read and filed into the right space by plain rules. In order of weight: what the user typed with it, the space the conversation is about, dates, places and people, then the kind of document. If Cue is sure, it files with Undo; if not, it asks with one-tap choices. A bill filed into a space that tracks money becomes an expense there.
+- **Share sheet** (`app/Filing.kt`, `ShareActivity`): sharing to Cue shows a small sheet with the result. It closes by itself when Cue was sure; otherwise it offers Move or Undo.
+- **Ask Cue**: a + button for camera, photos and files. History survives restarts. Saying "I'm planning…" starts up to 3 tap-to-answer questions (when, one question from the model specific to the goal, what to keep track of), then a preview, then the space. The model's dates and names are kept only if the user said them.
+- **Calls**: an Add photo button files the picture into the call's space and tells Cue, and Gemini Live sees the image.
+- **Spaces**: a one-line summary at the top (days left, money, who owes whom, next stop, items left).
+- Tested on the emulator: share, move, the expense, wedding planning by chat, a photo in chat, a photo during a call. Not yet tested on the razr.
+
 ## Not verified, and why
 
 - **Real speech (partly).** Since the Nov 13 morning fix, calls on LFM3 hear the user's own voice. Verified with speech played from the Mac and with Aman talking on live calls: the model transcribed "Can you add a haircut in the list?" and "Call me at 11pm every day." and both actions ran. "Aadhaar card" was heard as "other arcade" / "adha card", so Indian words can be misheard.
@@ -102,4 +111,4 @@ Every row below was run on the device and its log or screenshot checked. "Typed"
 | Model files on the phone | `/sdcard/Android/data/com.cue.app/files/` (4.0 GB) plus unpacked sections in the app's internal storage (3.2 GB) |
 | Clickable flow prototype (all 15 flows) | https://claude.ai/artifact/3CfgK3oiGpiTiMRoYSAT9r |
 | Design canvas (Round 3, Bloom with depth) | https://claude.ai/artifact/Q7JAtviuJ3UcRsWPvc8CNM |
-| Git | Two local commits on `main`; nothing pushed |
+| Git | https://github.com/amanroy3901/cue-proactive-agent (`main`) |

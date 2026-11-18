@@ -112,6 +112,13 @@ fun SpaceScreen(a: MainActivity, nav: Nav, albumId: Long) {
                     .clickable(role = Role.Button) { editing = !editing }.padding(horizontal = 14.dp, vertical = 8.dp))
             }
         }
+        val summary = Spaces.summary(al, bs, records, entries, t, zone)
+        if (summary.isNotBlank() && !editing) item {
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White.copy(alpha = 0.85f)).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                PixelHead(30.dp); Spacer(Modifier.width(10.dp))
+                Txt(summary, Type.body, modifier = Modifier.weight(1f))
+            }
+        }
         if (editing) item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SoftButton("Rename", color = Color.White.copy(alpha = 0.9f), height = 40.dp) {
@@ -145,8 +152,8 @@ fun SpaceScreen(a: MainActivity, nav: Nav, albumId: Long) {
         item { AddBlockRow(bs) { type -> scope.launch { spaces.addBlock(al.id, BlockSpec(type, Spaces.defaultTitle(type))) } } }
         item {
             Row(Modifier.fillMaxWidth().clip(CircleShape).background(Color.White.copy(alpha = 0.85f))
-                .clickable { a.talk() }.padding(start = 18.dp, end = 8.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Txt("Ask Cue about ${al.title}", Type.bodyStrong, modifier = Modifier.weight(1f))
+                .clickable { a.askSession.contextAlbum = al.id; nav.go("ask") }.padding(start = 18.dp, end = 8.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Txt("Send Cue photos or bills for ${al.title}", Type.bodyStrong, modifier = Modifier.weight(1f), maxLines = 2)
                 PixelHead(40.dp)
             }
         }

@@ -140,7 +140,7 @@ object CueTools {
     val focusRead = ToolSpec("focus_read", "How much time is left in the focus session", emptyList())
 
     private val spaceParam = ToolParam("space", "string", "which space or album, by name; empty for the one this call is about", required = false)
-    val spaceCreate = ToolSpec("space_create", "Make a space: one page for something the user is planning or going through (a trip, a doctor visit or surgery, a wedding, moving house, an exam). Cue picks the blocks; you may add more. Use it when the user starts planning something with several parts", listOf(
+    val spaceCreate = ToolSpec("space_create", "Make a space: one page for something the user is planning or going through (a trip, a doctor visit or surgery, a wedding, moving house, an exam). Cue picks the blocks; you may add more. Use it when the user starts planning something with several parts. Before calling, ask at most two short questions the user's words don't already answer: when it is, who is in it with them, and what they want kept track of (money, schedule, to-dos, documents, photos). Skip any they already said; if they say just make it, call right away", listOf(
         ToolParam("goal", "string", "what they are doing, in their words, like 'Goa trip next Friday with Riya'"),
         ToolParam("name", "string", "short name, like Goa trip", required = false),
         ToolParam("start", "string", "start day, like 20 Nov or next Friday", required = false),

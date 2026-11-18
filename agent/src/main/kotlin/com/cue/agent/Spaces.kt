@@ -160,27 +160,34 @@ class Spaces(private val env: AgentEnv) {
         val r = runCatching { brain.complete(FieldsRequest("space_plan", planPrompt(today), goal)) }.getOrNull()
         val spec = r?.raw?.takeIf { it.isNotBlank() }?.let { SpaceSpec.validate(it, base.title) }
         env.log("space plan: ${if (spec != null) "model, ${spec.blocks.size} blocks" else "template (model gave nothing usable)"}")
-        return spec?.let { merge(it, base) } ?: base
+        return spec?.let { merge(it, base, goal) } ?: base
     }
 
     /**
      * What plain code read from the goal wins over the model where code is sure: the people named after "with",
      * the budget, and an end date from "for 3 days". The model can drop or blur those; code doesn't.
      */
-    private fun merge(model: SpaceSpec, base: SpaceSpec): SpaceSpec {
+    private fun merge(model: SpaceSpec, base: SpaceSpec, goal: String): SpaceSpec {
         val people = base.blocks.firstOrNull { it.type == BlockType.EXPENSES }?.people.orEmpty()
         val budget = base.blocks.firstOrNull { it.type == BlockType.EXPENSES }?.budget
+        val g = goal.lowercase(Locale.ROOT)
+        // Models fill gaps with guesses ("Parents", today's date). Keep only names the user actually said.
+        fun said(names: List<String>) = names.filter { n -> Regex("\\b${Regex.escape(n.lowercase(Locale.ROOT))}\\b").containsMatchIn(g) }
         val blocks = model.blocks.map { b ->
             when (b.type) {
-                BlockType.EXPENSES -> b.copy(people = (b.people + people).distinctBy { it.lowercase(Locale.ROOT) }, budget = budget ?: b.budget)
-                BlockType.PEOPLE -> b.copy(people = (b.people + people).distinctBy { it.lowercase(Locale.ROOT) })
+                BlockType.EXPENSES -> b.copy(people = (said(b.people) + people).distinctBy { it.lowercase(Locale.ROOT) }, budget = budget ?: b.budget)
+                BlockType.PEOPLE -> b.copy(people = (said(b.people) + people).distinctBy { it.lowercase(Locale.ROOT) })
                 else -> b
             }
         }
-        val start = model.start ?: base.start
-        val end = (base.end ?: model.end)?.takeIf { start == null || !it.isBefore(start) }
+        // ...and only a date if the user gave one.
+        val start = (if (mentionsDate(goal)) model.start else null) ?: base.start
+        val end = (base.end ?: model.end?.takeIf { mentionsDate(goal) })?.takeIf { start == null || !it.isBefore(start) }
         return model.copy(start = start, end = end, blocks = blocks)
     }
+
+    /** Whether the user's words name a day at all: a number, a month, a weekday, or today/tomorrow/next... */
+    private fun mentionsDate(goal: String): Boolean = Regex("(?i)\\d|\\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\b|\\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\\b|\\b(today|tonight|tomorrow|next|this|weekend|week|month)\\b").containsMatchIn(goal)
 
     /** Saves the space: the album, its blocks in order, and a real list for every checklist block. */
     suspend fun create(spec: SpaceSpec): Long {
@@ -272,6 +279,45 @@ class Spaces(private val env: AgentEnv) {
 
     companion object {
         private val ME = setOf("me", "i", "myself", "self", "you", "mine")
+
+        /**
+         * Where the space stands in one line, so nobody has to scroll through its blocks: "In 6 days · ₹19,200 of
+         * ₹20,000 spent · Riya owes you ₹8,400 · Next: Check in at Taj, Sat 2 PM · 5 left on To pack".
+         */
+        fun summary(album: Album, blocks: List<SpaceBlock>, records: List<BlockRecord>, entries: List<ChecklistEntry>, now: Long, zone: ZoneId): String {
+            val parts = mutableListOf<String>()
+            val today = TextKit.local(now, zone).toLocalDate()
+            album.startAt?.let { s ->
+                val start = TextKit.local(s, zone).toLocalDate()
+                val end = album.endAt?.let { TextKit.local(it, zone).toLocalDate() } ?: start
+                val days = java.time.temporal.ChronoUnit.DAYS.between(today, start)
+                parts += when {
+                    days > 1 -> "In $days days"
+                    days == 1L -> "Tomorrow"
+                    !today.isAfter(end) -> if (end == start) "Today" else "Day ${java.time.temporal.ChronoUnit.DAYS.between(start, today) + 1} of ${java.time.temporal.ChronoUnit.DAYS.between(start, end) + 1}"
+                    else -> "Done"
+                }
+            }
+            blocks.firstOrNull { it.type == BlockType.EXPENSES }?.let { b ->
+                val ex = expenses(records.filter { it.blockId == b.id })
+                if (ex.isNotEmpty()) {
+                    val total = ex.sumOf { it.amount }
+                    parts += "₹${money(total)}" + (budget(b)?.let { " of ₹${money(it)}" } ?: "") + " spent"
+                    settle(ex, people(b)).firstOrNull()?.let { parts += it }
+                }
+            }
+            blocks.firstOrNull { it.type == BlockType.ITINERARY }?.let { b ->
+                stops(records.filter { it.blockId == b.id }).firstOrNull { it.at > now }?.let { st ->
+                    parts += "Next: ${st.text}, ${TextKit.dayLabel(st.at, now, zone)} ${TextKit.clock(st.at, zone)}"
+                }
+            }
+            blocks.filter { it.type == BlockType.CHECKLIST }.forEach { b ->
+                val id = runCatching { JSONObject(b.config).optLong("itemId", 0) }.getOrDefault(0)
+                val open = entries.count { it.itemId == id && !it.checked }
+                if (id > 0 && open > 0) parts += "$open left on ${b.title}"
+            }
+            return parts.joinToString(" · ")
+        }
 
         fun expenses(records: List<BlockRecord>): List<Expense> = records.mapNotNull { r ->
             val o = runCatching { JSONObject(r.data) }.getOrNull() ?: return@mapNotNull null

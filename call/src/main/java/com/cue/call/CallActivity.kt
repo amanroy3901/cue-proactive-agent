@@ -42,6 +42,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.CallEnd
 import androidx.compose.material.icons.rounded.Check
@@ -94,7 +95,9 @@ import com.cue.ui.PrimaryButton
 import com.cue.ui.SoftButton
 import com.cue.ui.Txt
 import com.cue.ui.Type
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -529,6 +532,38 @@ class CallActivity : ComponentActivity() {
         }
     }
 
+    /** Photos added mid-call: filed into the space the call is about, shown, and handed to Cue to talk about. */
+    private val pickPhotos = registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(5)) { uris ->
+        if (uris.isEmpty()) return@registerForActivityResult
+        val copied = uris.mapNotNull { com.cue.ingest.Ingest.copy(this, it) }
+        lifecycleScope.launch {
+            val f = flow ?: return@launch
+            val said = mutableListOf<String>()
+            for ((path, name) in copied) {
+                val filed = withContext(Dispatchers.IO) { com.cue.ingest.Ingest.fileNow(this@CallActivity, path, name, "call", "", f.albumId, photo = true) }
+                filed.album?.takeIf { filed.sure }?.let { f.albumId = it.id }
+                addLine("cue", filed.message())
+                said += filed.message()
+                // A live model can look at the picture too.
+                f.duplex?.let { d -> withContext(Dispatchers.IO) { jpeg(path) }?.let { d.sendImage(it) } }
+            }
+            val note = "(The user just added ${if (copied.size == 1) "a photo" else "${copied.size} photos"} during the call. Cue already filed ${if (copied.size == 1) "it" else "them"}: ${said.joinToString(" ")} Don't file again; mention it in one short sentence and carry on.)"
+            if (f.duplex != null) f.duplex?.prompt(note) else typedQueue = note.also { voice?.cancelListening() }
+        }
+    }
+
+    /** A picture shrunk for the model: longest side 768 px. */
+    private fun jpeg(path: String): ByteArray? = runCatching {
+        val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(path, o)
+        var sample = 1
+        while (maxOf(o.outWidth, o.outHeight) / sample > 1536) sample *= 2
+        val b = android.graphics.BitmapFactory.decodeFile(path, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
+        val scale = 768f / maxOf(b.width, b.height)
+        val small = if (scale < 1f) android.graphics.Bitmap.createScaledBitmap(b, (b.width * scale).toInt(), (b.height * scale).toInt(), true) else b
+        java.io.ByteArrayOutputStream().also { small.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, it) }.toByteArray()
+    }.getOrNull()
+
     private fun sendTyped(text: String) {
         if (text.isBlank()) return
         typedQueue = text.trim()
@@ -640,6 +675,9 @@ class CallActivity : ComponentActivity() {
             if (typing) TypeBar()
             Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 RoundControl(Icons.AutoMirrored.Rounded.VolumeUp, if (voice?.speakerOn != false) "Speaker on" else "Speaker off", active = voice?.speakerOn != false) { voice?.let { it.speakerOn = !it.speakerOn } }
+                RoundControl(Icons.Rounded.AddPhotoAlternate, "Add photo", active = false) {
+                    pickPhotos.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }
                 RoundControl(if (typing) Icons.Rounded.Mic else Icons.Rounded.Keyboard, if (typing) "Talk instead" else "Type instead", active = typing) {
                     typing = !typing; if (typing) voice?.cancelListening()
                 }

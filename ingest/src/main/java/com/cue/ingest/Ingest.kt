@@ -37,14 +37,39 @@ object Ingest {
         val file = File(path)
         if (!file.exists()) return
         val hash = sha(file)
+        val text = readText(context, file, fileName)
+        Log.i(TAG, "ingest $source $fileName -> ${text.length} chars")
+        CueRuntime.engine.ingestDocument(text, path, source, hash, fileName, albumId)
+    }
+
+    /** The words in a file: OCR for images, OCR of the first pages for PDFs, plain text as is. */
+    suspend fun readText(context: Context, file: File, fileName: String): String {
         val lower = fileName.lowercase()
-        val text = when {
+        return when {
             lower.endsWith(".pdf") -> pdfText(file)
             lower.endsWith(".txt") -> file.readText().take(8000)
             else -> ocr(context, Uri.fromFile(file))
         }
-        Log.i(TAG, "ingest $source $fileName -> ${text.length} chars")
-        CueRuntime.engine.ingestDocument(text, path, source, hash, fileName, albumId)
+    }
+
+    fun isImage(fileName: String) = fileName.lowercase().let { n -> listOf(".jpg", ".jpeg", ".png", ".webp", ".heic").any { n.endsWith(it) } }
+
+    /**
+     * Read and file one thing now and return what happened, for screens that show it (chat, a call, the share
+     * sheet). [hint] is what the user said with it; [contextAlbum] the space the conversation is about.
+     */
+    suspend fun fileNow(context: Context, path: String, fileName: String, source: String, hint: String = "", contextAlbum: Long? = null, photo: Boolean = isImage(fileName)): com.cue.agent.Inbox.Filed {
+        val file = File(path)
+        val text = readText(context, file, fileName)
+        Log.i(TAG, "fileNow $source $fileName -> ${text.length} chars")
+        return CueRuntime.engine.inbox.file(text, path, source, sha(file), fileName, hint, contextAlbum, photo)
+    }
+
+    /** Shared text (a message, a link, an address): saved as a small text file and filed like any other. */
+    suspend fun fileText(context: Context, text: String, source: String, hint: String = "", contextAlbum: Long? = null): com.cue.agent.Inbox.Filed {
+        val dir = File(context.filesDir, "media").apply { mkdirs() }
+        val f = File(dir, "text-${System.nanoTime()}.txt").apply { writeText(text) }
+        return fileNow(context, f.absolutePath, "shared.txt", source, hint, contextAlbum, photo = false)
     }
 
     private fun sha(f: File): String {
@@ -109,34 +134,5 @@ class IngestWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         if (!CueRuntime.ready) return Result.retry()
         Ingest.process(applicationContext, path, inputData.getString("source") ?: "share", inputData.getString("name") ?: "", inputData.getLong("albumId", -1L).takeIf { it > 0 })
         return Result.success()
-    }
-}
-
-/**
- * Share target: "Save to Cue" from WhatsApp, Gmail, Drive or Files. The content URI grant only lasts while this
- * activity runs, so the file is copied at once and processed in the background.
- */
-class ShareActivity : Activity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        val uris = mutableListOf<Uri>()
-        when (intent?.action) {
-            Intent.ACTION_SEND -> {
-                @Suppress("DEPRECATION")
-                (intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))?.let { uris += it }
-                if (uris.isEmpty()) intent.getStringExtra(Intent.EXTRA_TEXT)?.let { text ->
-                    val dir = File(filesDir, "media").apply { mkdirs() }
-                    val f = File(dir, "text-${System.nanoTime()}.txt").apply { writeText(text) }
-                    Ingest.enqueue(this, f.absolutePath, "share", "shared.txt")
-                }
-            }
-            Intent.ACTION_SEND_MULTIPLE -> {
-                @Suppress("DEPRECATION")
-                intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris += it }
-            }
-        }
-        uris.forEach { u -> Ingest.copy(this, u)?.let { (path, name) -> Ingest.enqueue(this, path, "share", name) } }
-        Toast.makeText(this, "Cue is filing it…", Toast.LENGTH_SHORT).show()
-        finish()
     }
 }
