@@ -106,6 +106,7 @@ class CallFlow internal constructor(
     private fun rules(kind: String): String = buildString {
         append("You are Cue, a warm phone assistant on a call. Reply in one or two short sentences. ")
         append("Use tools to save lists, notes and reminders the user mentions. Never invent facts that are not in the context. ")
+        append(WORKFLOW_RULES)
         if (kind == ReminderKind.PRACTICE) append("This is English speaking practice: keep the conversation going and gently correct one mistake per turn. ")
     }
 
@@ -261,6 +262,7 @@ class CallFlow internal constructor(
         duplex?.close()
         val now = engine.clock.now()
         engine.dao.call(callId)?.let { engine.dao.updateCall(it.copy(endedAt = now, outcome = "ANSWERED")) }
+        runCatching { afterCall() }.onFailure { engine.log("after-call checks failed: ${it.message}") }
         runCatching { Filing(engine).file(kind, userLines, unhandled, executor.changes, albumId ?: engine.activeAlbum()?.id, practiceNotes) }
             .onSuccess { executor.changes += it }
             .onFailure { engine.log("filing failed: ${it.message}") }
@@ -276,7 +278,46 @@ class CallFlow internal constructor(
     }
 
     fun changes(): List<String> = executor.changes.toList()
+
+    /** Facts Cue picked up on this call that the user hasn't confirmed yet: the "What Cue learned" card. */
+    var learned: List<com.cue.domain.ProfileFact> = emptyList()
+        private set
+
+    /** After the call: catch promises no tool kept, and pick up facts worth remembering (unconfirmed). */
+    private suspend fun afterCall() {
+        val cueLines = transcript.filter { it.first == "cue" }.drop(1).map { it.second }
+        for (b in PromiseCheck.broken(cueLines, executor.changes)) {
+            val at = TextKit.parseWhen(b.about, engine.clock.now(), engine.clock.zone)
+            if (at != null && at > engine.clock.now()) {
+                val id = scheduleFollowUp(engine, b.about.substringBefore(" at ").substringBefore(" tomorrow").ifBlank { "what we talked about" }, at)
+                executor.changes += "follow_up: #$id kept a promise from the call (\"${b.sentence}\")"
+            } else {
+                engine.surfaces.notify("Cue said it would follow up", "\"${b.sentence}\" No time was set. Open Cue to set one.", "promise")
+                executor.changes += "promise_check: no time for \"${b.sentence}\"; asked you in a notification"
+            }
+            engine.log("promise check: ${b.sentence}")
+        }
+        val profile = Profile(engine)
+        val got = mutableListOf<com.cue.domain.ProfileFact>()
+        for ((cat, text) in Learner.candidates(userLines)) {
+            val known = engine.dao.facts().any { TextKit.similarity(it.text, text) >= 0.7 }
+            if (known) continue
+            got += profile.remember(text, cat, source = "learned", confirmed = false).fact
+        }
+        learned = got
+        if (got.isNotEmpty()) executor.changes += "learned: ${got.size} thing${if (got.size == 1) "" else "s"} about you to keep or remove"
+    }
     fun transcript(): List<Pair<String, String>> = transcript.toList()
 }
+
+/** How Cue works through a request; shared by every brain's prompt. */
+const val WORKFLOW_RULES = "Before acting, check what you already know (the profile and context below) and use it instead of asking again. " +
+    "Never fill in a detail the user didn't give: if a tool answers NEEDS, ask the user its ASK question in your own words, then call the tool again with the answer. " +
+    "If a tool answers CONFIRM, ask exactly that and call again with confirm=yes only after a clear yes. " +
+    "If a result has IMPACT, tell the user in a few words what else changed or clashes. " +
+    "If a result has FOLLOW-UP, ask those questions one at a time over the next turns, skipping any already answered, and save each answer with the matching tool. " +
+    "When the user tells you something lasting about themselves (a routine, preference, health fact, a person), save it with remember. " +
+    "Promised work: never say you'll remind, call, check back or follow up unless you set it up with a tool in the same turn (reminder_set, follow_up, rule_add). " +
+    "For health, never diagnose; for worrying readings, suggest the doctor. "
 
 internal fun newCallSession(kind: String, reminderId: Long?, now: Long) = CallSession(kind = kind, reminderId = reminderId, ringAt = now, answeredAt = now, outcome = "IN_CALL")

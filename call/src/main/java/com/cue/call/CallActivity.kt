@@ -81,9 +81,13 @@ import com.cue.agent.TextKit
 import com.cue.domain.ChecklistEntry
 import com.cue.domain.ItemType
 import com.cue.domain.ReminderKind
+import com.cue.ui.AppTint
+import com.cue.ui.AppTints
 import com.cue.ui.CheckRow
 import com.cue.ui.Cue
-import com.cue.ui.CueOrb
+import com.cue.ui.Pixel
+import com.cue.ui.PixelMood
+import com.cue.ui.pixelMoodForTool
 import com.cue.ui.CueTheme
 import com.cue.ui.Pill
 import com.cue.ui.PrimaryButton
@@ -96,35 +100,46 @@ import kotlinx.coroutines.launch
 
 enum class Phase { RINGING, CONNECTING, IN_CALL, ENDED }
 
+private fun AppTint.pair() = light to deep
+
 /** Plain-words label and colour for each thing a call saved. */
 fun summaryLabel(tool: String): Pair<String, Pair<Color, Color>> = when (tool) {
-    "checklist_add" -> "Added to your list" to (Color(0xFF2A9A90) to Color(0xFF0D4B48))
-    "checklist_tick" -> "Ticked off" to (Color(0xFF2A9A90) to Color(0xFF0D4B48))
-    "habit_add" -> "New habit" to (Color(0xFFFFC861) to Color(0xFFF08A00))
-    "habit_remove", "habit_rename" -> "Habit updated" to (Color(0xFFFFC861) to Color(0xFFF08A00))
-    "checklist_edit", "checklist_untick", "list_create", "list_rename", "list_delete" -> "List updated" to (Color(0xFF2A9A90) to Color(0xFF0D4B48))
-    "pending_update", "pending_done", "pending_remove" -> "People updated" to (Color(0xFFC6E6F5) to Color(0xFF3D8DB8))
-    "reminder_move", "reminder_edit", "reminder_cancel", "practice_schedule" -> "Reminder changed" to (Color(0xFFFFB3CB) to Color(0xFFE2547F))
-    "note_edit", "note_remove" -> "Note updated" to (Color(0xFFFFC861) to Color(0xFFF08A00))
-    "journal_add" -> "Added to your journal" to (Color(0xFFFFB49C) to Color(0xFFF0663F))
-    "album_create", "item_move" -> "Albums updated" to (Color(0xFFB9C6FF) to Color(0xFF6C7FE8))
-    "focus_start", "focus_stop" -> "Focus" to (Color(0xFFD2C2FF) to Color(0xFF8466DB))
-    "checklist_remove" -> "Removed from your list" to (Color(0xFF2A9A90) to Color(0xFF0D4B48))
-    "note_save" -> "Saved a note" to (Color(0xFFFFC861) to Color(0xFFF08A00))
-    "checkin_time" -> "Daily call moved" to (Color(0xFFFFB3CB) to Color(0xFFE2547F))
-    "reminder_set" -> "Reminder set" to (Color(0xFFFFB3CB) to Color(0xFFE2547F))
-    "event_move" -> "Flight moved" to (Color(0xFFB9C6FF) to Color(0xFF6C7FE8))
-    "habit_checkin" -> "Habit logged" to (Color(0xFFFFC861) to Color(0xFFF08A00))
-    "dose_schedule" -> "Medicine reminders set" to (Color(0xFFFFB3CB) to Color(0xFFE2547F))
-    "dose_taken" -> "Dose recorded" to (Color(0xFFFFB3CB) to Color(0xFFE2547F))
-    "pending_add" -> "Remembered for later" to (Color(0xFFC6E6F5) to Color(0xFF3D8DB8))
-    "pending_resolve" -> "Marked done" to (Color(0xFFC6E6F5) to Color(0xFF3D8DB8))
-    "album_search" -> "Found it" to (Color(0xFFB9C6FF) to Color(0xFF6C7FE8))
-    "journal_lookup" -> "Read your journal" to (Color(0xFFFFB49C) to Color(0xFFF0663F))
-    "journal_write" -> "Today's journal written" to (Color(0xFFFFB49C) to Color(0xFFF0663F))
-    "renewal_remind" -> "Renewal reminder set" to (Color(0xFFA8E6CC) to Color(0xFF3E9E7A))
-    "practice_note" -> "Practice notes" to (Color(0xFFFFD3B5) to Color(0xFFFF8E6B))
-    else -> "Nothing new to file" to (Color(0xFFA7B3B1) to Color(0xFF5D6A68))
+    "checklist_add" -> "Added to your list" to AppTints.lists.pair()
+    "checklist_tick" -> "Ticked off" to AppTints.lists.pair()
+    "habit_add" -> "New habit" to AppTints.habits.pair()
+    "habit_remove", "habit_rename" -> "Habit updated" to AppTints.habits.pair()
+    "checklist_edit", "checklist_untick", "list_create", "list_rename", "list_delete" -> "List updated" to AppTints.lists.pair()
+    "pending_update", "pending_done", "pending_remove" -> "People updated" to AppTints.people.pair()
+    "reminder_move", "reminder_edit", "reminder_cancel", "practice_schedule" -> "Reminder changed" to AppTints.reminders.pair()
+    "note_edit", "note_remove" -> "Note updated" to AppTints.habits.pair()
+    "journal_add" -> "Added to your journal" to AppTints.journal.pair()
+    "album_create", "item_move" -> "Albums updated" to AppTints.albums.pair()
+    "focus_start", "focus_stop" -> "Focus" to AppTints.focus.pair()
+    "checklist_remove" -> "Removed from your list" to AppTints.lists.pair()
+    "note_save" -> "Saved a note" to AppTints.habits.pair()
+    "checkin_time" -> "Daily call moved" to AppTints.reminders.pair()
+    "reminder_set" -> "Reminder set" to AppTints.reminders.pair()
+    "event_move" -> "Flight moved" to AppTints.albums.pair()
+    "habit_checkin" -> "Habit logged" to AppTints.habits.pair()
+    "dose_schedule" -> "Medicine reminders set" to AppTints.reminders.pair()
+    "dose_taken" -> "Dose recorded" to AppTints.reminders.pair()
+    "pending_add" -> "Remembered for later" to AppTints.people.pair()
+    "pending_resolve" -> "Marked done" to AppTints.people.pair()
+    "album_search" -> "Found it" to AppTints.albums.pair()
+    "journal_lookup" -> "Read your journal" to AppTints.journal.pair()
+    "journal_write" -> "Today's journal written" to AppTints.journal.pair()
+    "renewal_remind" -> "Renewal reminder set" to AppTints.renewals.pair()
+    "practice_note" -> "Practice notes" to AppTints.practice.pair()
+    "medicine_stop" -> "Medicine reminders stopped" to AppTints.reminders.pair()
+    "measure_log" -> "Reading saved" to AppTints.renewals.pair()
+    "measure_schedule" -> "Reading reminders set" to AppTints.renewals.pair()
+    "remember" -> "Cue will remember" to AppTints.albums.pair()
+    "profile_forget" -> "Forgotten" to AppTints.albums.pair()
+    "follow_up" -> "I'll check back" to AppTints.reminders.pair()
+    "rule_add", "rule_remove" -> "When-this-happens rule" to AppTints.focus.pair()
+    "promise_check" -> "Needs a time" to AppTints.reminders.pair()
+    "learned" -> "Picked up about you" to AppTints.albums.pair()
+    else -> "Nothing new to file" to (Color(0xFFADA6C4) to Cue.muted)
 }
 enum class Live { SPEAKING, LISTENING, THINKING, IDLE }
 
@@ -148,7 +163,12 @@ class CallActivity : ComponentActivity() {
     private val lines = mutableStateListOf<Line>()
     /** Bumped after every turn so the cards on screen reload what is saved. */
     private var cardVersion by mutableStateOf(0)
+    /** Pixel acts out the last tool call for a couple of seconds, then goes back to the live state. */
+    private var action by mutableStateOf<PixelMood?>(null)
+    private var actionStamp by mutableStateOf(0L)
     private val changes = mutableStateListOf<String>()
+    /** Facts Cue picked up on this call, waiting for Keep or Remove. */
+    private val learned = mutableStateListOf<com.cue.domain.ProfileFact>()
 
     private var kind = "TALK"
     private var reminderId: Long? = null
@@ -228,6 +248,8 @@ class CallActivity : ComponentActivity() {
         lines.removeAll { it.card != null && sameCard(it.card, card) }
         lines += Line("card", "", card)
         cardVersion++
+        action = pixelMoodForTool(card::class.simpleName.orEmpty().lowercase())
+        actionStamp = System.currentTimeMillis()
     }
 
     private fun sameCard(a: CallCard, b: CallCard): Boolean = when {
@@ -501,7 +523,8 @@ class CallActivity : ComponentActivity() {
         val app = applicationContext
         CueRuntime.scope.launch {
             val c = f?.end().orEmpty()
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { changes.clear(); changes += c }
+            val got = f?.learned.orEmpty()
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { changes.clear(); changes += c.filterNot { it.startsWith("learned:") }; learned.clear(); learned += got }
             CallService.stop(app)
         }
     }
@@ -535,8 +558,8 @@ class CallActivity : ComponentActivity() {
     private fun Ringing() {
         LaunchedEffect(Unit) { delay(32_000); if (phase == Phase.RINGING) finish() }
         val pulse = rememberInfiniteTransition(label = "ring").animateFloat(1f, 1.12f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "p")
-        val bg = if (night) Brush.verticalGradient(listOf(Color(0xFF123B3A), Color(0xFF0B1B1C))) else Cue.sunrise
-        val fg = if (night) Cue.nightText else Color(0xFF3A1A14)
+        val bg = if (night) Brush.verticalGradient(listOf(Color(0xFF2E2652), Cue.night)) else Cue.sunrise
+        val fg = if (night) Cue.nightText else Color(0xFF3B1630)
         Column(Modifier.fillMaxSize().background(bg)) {
             Column(Modifier.weight(1f).fillMaxWidth().statusBarsPadding().padding(horizontal = 20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 Pill(java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("EEEE, h:mm a")), Color.White.copy(alpha = if (night) 0.12f else 0.65f),
@@ -544,14 +567,13 @@ class CallActivity : ComponentActivity() {
                 Spacer(Modifier.height(28.dp))
                 Box(Modifier.size(232.dp), contentAlignment = Alignment.Center) {
                     Box(Modifier.size(220.dp).scale(pulse.value).border(1.5.dp, Cue.coralDeep.copy(alpha = 0.25f), CircleShape))
-                    Box(Modifier.size(176.dp).border(2.dp, Color.White.copy(alpha = 0.9f), CircleShape))
-                    Box(Modifier.size(170.dp).drawBehind { drawCircle(Brush.radialGradient(listOf(Cue.coral.copy(alpha = 0.45f), Color.Transparent))) })
-                    CueOrb(116.dp, "Cue", ring = true)
+                    Box(Modifier.size(200.dp).drawBehind { drawCircle(Brush.radialGradient(listOf((if (night) Cue.nightGlow else Cue.coral).copy(alpha = 0.4f), Color.Transparent))) })
+                    Pixel(if (night) PixelMood.RingingNight else PixelMood.Ringing, 220.dp)
                 }
                 Spacer(Modifier.height(20.dp))
                 Txt("Cue is calling", Type.bodyStrong, if (night) Cue.apricot else Cue.coralText)
                 Txt(title, Type.display.copy(fontSize = androidx.compose.ui.unit.TextUnit(32f, androidx.compose.ui.unit.TextUnitType.Sp)), fg)
-                Txt("About a minute", Type.body, if (night) Cue.nightMuted else Color(0xFF6B3A2E))
+                Txt("About a minute", Type.body, if (night) Cue.nightMuted else Color(0xFF6E3A5C))
                 Spacer(Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     chips.take(2).forEach {
@@ -563,46 +585,51 @@ class CallActivity : ComponentActivity() {
             }
             Column(
                 Modifier.fillMaxWidth().shadow(30.dp, RoundedCornerShape(topStart = 40.dp, topEnd = 40.dp), spotColor = Cue.coralDeep.copy(alpha = 0.4f))
-                    .clip(RoundedCornerShape(topStart = 40.dp, topEnd = 40.dp)).background(Color(0xFFFFFBF7)).navigationBarsPadding().padding(20.dp),
+                    .clip(RoundedCornerShape(topStart = 40.dp, topEnd = 40.dp)).background(Color(0xFFFDFBFF)).navigationBarsPadding().padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(68.dp).clip(CircleShape).background(Brush.verticalGradient(listOf(Color(0xFFFFE6DE), Color(0xFFFFD2C4)))).clickable(role = Role.Button, onClickLabel = "Decline") { decline() },
+                    Box(Modifier.size(68.dp).clip(CircleShape).background(Brush.verticalGradient(listOf(Cue.coralTint, Color(0xFFFFD3CE)))).clickable(role = Role.Button, onClickLabel = "Decline") { decline() },
                         contentAlignment = Alignment.Center) { Icon(Icons.Rounded.Close, "Decline", tint = Cue.coralText, modifier = Modifier.size(28.dp)) }
                     PrimaryButton("Pick up", Modifier.weight(1f), icon = Icons.Rounded.Call, height = 68.dp) { accept() }
                 }
-                SoftButton("Ring me in 10 minutes", Modifier.fillMaxWidth(), color = Color(0xFFF3EEE7)) { snooze() }
+                SoftButton("Ring me in 10 minutes", Modifier.fillMaxWidth(), color = Color(0xFFF1EDFA)) { snooze() }
             }
         }
     }
 
     @Composable
     private fun InCall() {
-        val bgColor = if (night) Cue.night else Cue.cream
+        val bgColor = if (night) Cue.night else Cue.base
         val fg = if (night) Cue.nightText else Cue.ink
         val listState = rememberLazyListState()
         val tail = lines.lastOrNull()?.text?.length ?: 0
         LaunchedEffect(lines.size, partial, tail / 40) { if (lines.isNotEmpty()) listState.animateScrollToItem(lines.size) }
         Column(
             Modifier.fillMaxSize().background(bgColor).drawBehind {
-                drawRect(Brush.radialGradient(listOf(if (night) Cue.tealLight.copy(alpha = 0.35f) else Color(0xFFFFDCC8), Color.Transparent), center = Offset(size.width / 2, 0f), radius = size.width * 1.1f))
+                drawRect(Brush.radialGradient(listOf(if (night) Cue.nightGlow.copy(alpha = 0.35f) else Cue.glowLavender, Color.Transparent), center = Offset(size.width / 2, 0f), radius = size.width * 1.1f))
             }.statusBarsPadding().navigationBarsPadding().imePadding().padding(horizontal = 18.dp),
         ) {
             Spacer(Modifier.height(8.dp))
             Row(
-                Modifier.fillMaxWidth().shadow(12.dp, CircleShape, spotColor = Cue.tealDeep.copy(alpha = 0.3f)).clip(CircleShape)
+                Modifier.fillMaxWidth().shadow(12.dp, CircleShape, spotColor = Cue.primaryDeep.copy(alpha = 0.3f)).clip(CircleShape)
                     .background(if (night) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.85f)).padding(start = 8.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                CueOrb(44.dp)
-                Spacer(Modifier.width(12.dp))
+                Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Txt(title, Type.bodyStrong, fg, maxLines = 1)
                     val state = when (phase) { Phase.CONNECTING -> "Connecting"; else -> when (live) { Live.SPEAKING -> "Speaking"; Live.LISTENING -> "Listening"; Live.THINKING -> "Thinking"; Live.IDLE -> "On call" } }
-                    Txt("$state · ${seconds / 60}:${"%02d".format(seconds % 60)}" + if (brainLabel.isNotEmpty()) " · $brainLabel" else "", Type.smallStrong, if (night) Cue.apricot else Cue.tealDeep, maxLines = 1)
+                    Txt("$state · ${seconds / 60}:${"%02d".format(seconds % 60)}" + if (brainLabel.isNotEmpty()) " · $brainLabel" else "", Type.smallStrong, if (night) Cue.apricot else Cue.primaryDeep, maxLines = 1)
                 }
                 Wave(live == Live.LISTENING, level)
             }
+            LaunchedEffect(actionStamp) { if (action != null) { delay(2200); action = null } }
+            val mood = action ?: when (phase) {
+                Phase.CONNECTING -> PixelMood.Connecting
+                else -> when (live) { Live.SPEAKING -> PixelMood.Speaking; Live.LISTENING -> PixelMood.Listening; Live.THINKING -> PixelMood.Thinking; Live.IDLE -> PixelMood.Idle }
+            }
+            Box(Modifier.fillMaxWidth().padding(top = 6.dp), contentAlignment = Alignment.Center) { Pixel(mood, 150.dp, level = level) }
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 14.dp)) {
                 items(lines) { l ->
                     if (l.card != null) CallCardView(l.card, cardVersion, night)
@@ -625,14 +652,14 @@ class CallActivity : ComponentActivity() {
     private fun TypeBar() {
         var text by remember { mutableStateOf("") }
         Row(
-            Modifier.fillMaxWidth().shadow(10.dp, CircleShape, spotColor = Cue.tealDeep.copy(alpha = 0.3f)).clip(CircleShape).background(Color.White).padding(start = 18.dp, end = 6.dp),
+            Modifier.fillMaxWidth().shadow(10.dp, CircleShape, spotColor = Cue.primaryDeep.copy(alpha = 0.3f)).clip(CircleShape).background(Color.White).padding(start = 18.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             BasicTextField(text, { text = it }, Modifier.weight(1f).padding(vertical = 16.dp), textStyle = Type.body.copy(color = Cue.ink), singleLine = true,
-                cursorBrush = SolidColor(Cue.tealDeep), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                cursorBrush = SolidColor(Cue.primaryDeep), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { sendTyped(text); text = "" }),
                 decorationBox = { inner -> if (text.isEmpty()) Txt("Type to Cue…", Type.body, Cue.muted); inner() })
-            Box(Modifier.size(44.dp).clip(CircleShape).background(Cue.tealButton).clickable(role = Role.Button, onClickLabel = "Send") { sendTyped(text); text = "" }, contentAlignment = Alignment.Center) {
+            Box(Modifier.size(44.dp).clip(CircleShape).background(Cue.primaryButton).clickable(role = Role.Button, onClickLabel = "Send") { sendTyped(text); text = "" }, contentAlignment = Alignment.Center) {
                 Icon(Icons.AutoMirrored.Rounded.Send, "Send", tint = Color.White, modifier = Modifier.size(20.dp))
             }
         }
@@ -649,9 +676,9 @@ class CallActivity : ComponentActivity() {
             val ink = if (user) Color.White.copy(alpha = if (faded) 0.7f else 1f) else if (night) Cue.nightText else Cue.ink
             Box(
                 Modifier.widthIn(max = 290.dp)
-                    .shadow(if (faded) 0.dp else 10.dp, shape, spotColor = if (user) Cue.tealDeep.copy(alpha = 0.5f) else Color.Black.copy(alpha = 0.18f))
+                    .shadow(if (faded) 0.dp else 10.dp, shape, spotColor = if (user) Cue.primaryDeep.copy(alpha = 0.5f) else Color.Black.copy(alpha = 0.18f))
                     .clip(shape)
-                    .background(if (user) Cue.tealBrush else Brush.linearGradient(listOf(if (night) Color(0xFF1A2D2D) else Color.White, if (night) Color(0xFF1A2D2D) else Color.White)))
+                    .background(if (user) Cue.primaryBrush else Brush.linearGradient(listOf(if (night) Cue.nightRaised else Color.White, if (night) Cue.nightRaised else Color.White)))
                     .padding(horizontal = 18.dp, vertical = 13.dp),
             ) {
                 if (user || spoken < 0) Txt(text, Type.body, ink)
@@ -677,10 +704,10 @@ class CallActivity : ComponentActivity() {
     private fun RoundControl(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, active: Boolean, onClick: () -> Unit) {
         Box(
             Modifier.size(62.dp).shadow(10.dp, CircleShape, spotColor = Color.Black.copy(alpha = 0.25f)).clip(CircleShape)
-                .background(Brush.verticalGradient(if (active) listOf(Color.White, Color(0xFFE6F5F1)) else listOf(Color.White, Color(0xFFF3EEE7))))
+                .background(Brush.verticalGradient(if (active) listOf(Color.White, Cue.primaryTint) else listOf(Color.White, Color(0xFFF1EDFA))))
                 .clickable(role = Role.Button, onClickLabel = label, onClick = onClick),
             contentAlignment = Alignment.Center,
-        ) { Icon(icon, label, tint = if (active) Cue.tealDeep else Cue.ink, modifier = Modifier.size(24.dp)) }
+        ) { Icon(icon, label, tint = if (active) Cue.primaryDeep else Cue.ink, modifier = Modifier.size(24.dp)) }
     }
 
     @Composable
@@ -688,7 +715,27 @@ class CallActivity : ComponentActivity() {
         Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.height(28.dp)) {
             listOf(0.4f, 0.8f, 1f, 0.6f, 0.3f).forEachIndexed { i, base ->
                 val h = if (active) (8 + 20 * (base * (0.4f + level))).coerceAtMost(28f) else 6f + i
-                Box(Modifier.width(4.dp).height(h.dp).clip(RoundedCornerShape(2.dp)).background(if (i == 2) Cue.coral else Cue.teal))
+                Box(Modifier.width(4.dp).height(h.dp).clip(RoundedCornerShape(2.dp)).background(if (i == 2) Cue.coral else Cue.primary))
+            }
+        }
+    }
+
+    /** "What Cue learned": facts picked up on the call. Nothing is kept until the user says so. */
+    @Composable
+    private fun LearnedCard(facts: List<com.cue.domain.ProfileFact>, dark: Boolean, fg: Color, keep: (com.cue.domain.ProfileFact) -> Unit, remove: (com.cue.domain.ProfileFact) -> Unit) {
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(if (dark) Color.White.copy(alpha = 0.10f) else Cue.primaryTint).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Txt("What Cue learned", Type.bodyStrong, fg)
+            Txt("Keep these so I know them on every call?", Type.small, if (dark) Cue.nightMuted else Cue.muted)
+            facts.forEach { f ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Txt(f.text, Type.body, fg, modifier = Modifier.weight(1f), maxLines = 2)
+                    Spacer(Modifier.width(8.dp))
+                    Txt("Remove", Type.small, if (dark) Cue.nightMuted else Cue.muted, modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable { remove(f) }.padding(8.dp))
+                    Txt("Keep", Type.bodyStrong, if (dark) Color.White else Cue.primaryDeep, modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable { keep(f) }.padding(8.dp))
+                }
             }
         }
     }
@@ -698,19 +745,22 @@ class CallActivity : ComponentActivity() {
         val dark = night || kind == ReminderKind.CHECKIN_NIGHT
         val fg = if (dark) Cue.nightText else Cue.ink
         Column(
-            Modifier.fillMaxSize().background(if (dark) Cue.night else Cue.cream).drawBehind {
-                drawRect(Brush.radialGradient(listOf(Cue.tealLight.copy(alpha = if (dark) 0.45f else 0.18f), Color.Transparent), center = Offset(size.width / 2, 0f), radius = size.width * 1.1f))
+            Modifier.fillMaxSize().background(if (dark) Cue.night else Cue.base).drawBehind {
+                drawRect(Brush.radialGradient(listOf((if (dark) Cue.nightGlow else Cue.primaryLight).copy(alpha = if (dark) 0.45f else 0.18f), Color.Transparent), center = Offset(size.width / 2, 0f), radius = size.width * 1.1f))
             }.statusBarsPadding().navigationBarsPadding().padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Spacer(Modifier.height(28.dp))
-            Box(Modifier.size(64.dp).shadow(16.dp, CircleShape, spotColor = Cue.tealLight).clip(CircleShape).background(Brush.radialGradient(listOf(Color(0xFF5FD1C4), Cue.teal, Cue.tealDeep))), contentAlignment = Alignment.Center) {
-                Icon(Icons.Rounded.Check, null, tint = Color.White, modifier = Modifier.size(30.dp))
-            }
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { Pixel(if (dark) PixelMood.Sleeping else PixelMood.Celebrate, 150.dp) }
             Txt(if (dark) "All tucked away. Sleep well." else "Done. Here's what I saved.", Type.display, fg)
             Txt("From this ${seconds / 60}:${"%02d".format(seconds % 60)} call", Type.body, if (dark) Cue.nightMuted else Cue.muted)
             val shown = changes.ifEmpty { listOf("none: Nothing new this time") }
             androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (learned.isNotEmpty()) item {
+                    LearnedCard(learned.toList(), dark, fg,
+                        keep = { fact -> CueRuntime.scope.launch { CueRuntime.engine.dao.updateFact(fact.copy(confirmed = true)) }; learned.remove(fact) },
+                        remove = { fact -> CueRuntime.scope.launch { CueRuntime.engine.dao.deleteFact(fact.id) }; learned.remove(fact) })
+                }
                 items(shown) { c ->
                     val (label, tint) = summaryLabel(c.substringBefore(":"))
                     Row(
@@ -728,8 +778,8 @@ class CallActivity : ComponentActivity() {
                     }
                 }
             }
-            PrimaryButton(if (dark) "Good night" else "Done", Modifier.fillMaxWidth(), brush = if (dark) Brush.verticalGradient(listOf(Color.White, Color(0xFFF1ECE4))) else Cue.tealButton,
-                textColor = if (dark) Cue.tealDeep else Color.White) { finish() }
+            PrimaryButton(if (dark) "Good night" else "Done", Modifier.fillMaxWidth(), brush = if (dark) Brush.verticalGradient(listOf(Color.White, Color(0xFFF1EDFA))) else Cue.primaryButton,
+                textColor = if (dark) Cue.primaryDeep else Color.White) { finish() }
         }
     }
 }

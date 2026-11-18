@@ -47,6 +47,8 @@ interface CueDao {
     @Query("SELECT * FROM album ORDER BY COALESCE(startAt, createdAt) DESC") suspend fun albums(): List<Album>
     @Query("SELECT * FROM album ORDER BY COALESCE(startAt, createdAt) DESC") fun albumsFlow(): Flow<List<Album>>
     @Query("SELECT * FROM album WHERE id = :id") fun albumFlow(id: Long): Flow<Album?>
+    @Query("DELETE FROM album WHERE id = :id") suspend fun deleteAlbum(id: Long)
+    @Query("UPDATE item SET albumId = NULL WHERE albumId = :albumId") suspend fun unlinkAlbumItems(albumId: Long)
 
     // Places
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertPlace(place: Place): Long
@@ -106,4 +108,46 @@ interface CueDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertHabitLog(log: HabitLog): Long
     @Query("SELECT * FROM habit_log WHERE habitId = :habitId ORDER BY day DESC LIMIT 60") suspend fun habitLogs(habitId: Long): List<HabitLog>
     @Query("SELECT * FROM habit_log ORDER BY day DESC") fun habitLogsFlow(): Flow<List<HabitLog>>
+
+    // Plans, reminders by key prefix
+    @Query("SELECT * FROM reminder WHERE `key` LIKE :prefix || '%'") suspend fun remindersWithKeyPrefix(prefix: String): List<Reminder>
+    @Query("SELECT * FROM item WHERE type = 'PLAN' ORDER BY createdAt DESC") suspend fun plans(): List<Item>
+    @Query("SELECT * FROM item WHERE type = 'PLAN' ORDER BY createdAt DESC") fun plansFlow(): Flow<List<Item>>
+
+    // Profile
+    @Insert suspend fun insertFact(fact: ProfileFact): Long
+    @Update suspend fun updateFact(fact: ProfileFact)
+    @Query("DELETE FROM profile_fact WHERE id = :id") suspend fun deleteFact(id: Long)
+    @Query("SELECT * FROM profile_fact WHERE id = :id") suspend fun fact(id: Long): ProfileFact?
+    @Query("SELECT * FROM profile_fact ORDER BY updatedAt DESC") suspend fun facts(): List<ProfileFact>
+    @Query("SELECT * FROM profile_fact ORDER BY updatedAt DESC") fun factsFlow(): Flow<List<ProfileFact>>
+    @Query("SELECT * FROM profile_fact WHERE `key` = :key LIMIT 1") suspend fun factByKey(key: String): ProfileFact?
+
+    // Measurements
+    @Insert suspend fun insertMeasurement(m: Measurement): Long
+    @Query("DELETE FROM measurement WHERE id = :id") suspend fun deleteMeasurement(id: Long)
+    @Query("SELECT * FROM measurement WHERE kind = :kind ORDER BY takenAt DESC LIMIT :limit") suspend fun measurements(kind: String, limit: Int = 30): List<Measurement>
+    @Query("SELECT * FROM measurement ORDER BY takenAt DESC LIMIT 60") fun measurementsFlow(): Flow<List<Measurement>>
+
+    // Standing rules
+    @Insert suspend fun insertRule(rule: StandingRule): Long
+    @Update suspend fun updateRule(rule: StandingRule)
+    @Query("SELECT * FROM standing_rule WHERE active = 1 ORDER BY createdAt DESC") suspend fun activeRules(): List<StandingRule>
+    @Query("SELECT * FROM standing_rule WHERE active = 1 ORDER BY createdAt DESC") fun rulesFlow(): Flow<List<StandingRule>>
+    @Query("SELECT * FROM standing_rule WHERE id = :id") suspend fun rule(id: Long): StandingRule?
+
+    // Spaces: blocks and their records
+    @Insert suspend fun insertBlock(b: SpaceBlock): Long
+    @Update suspend fun updateBlock(b: SpaceBlock)
+    @Query("DELETE FROM space_block WHERE id = :id") suspend fun deleteBlock(id: Long)
+    @Query("SELECT * FROM space_block WHERE id = :id") suspend fun block(id: Long): SpaceBlock?
+    @Query("SELECT * FROM space_block WHERE albumId = :albumId ORDER BY position") suspend fun blocks(albumId: Long): List<SpaceBlock>
+    @Query("SELECT * FROM space_block WHERE albumId = :albumId ORDER BY position") fun blocksFlow(albumId: Long): Flow<List<SpaceBlock>>
+    @Insert suspend fun insertRecord(r: BlockRecord): Long
+    @Update suspend fun updateRecord(r: BlockRecord)
+    @Query("DELETE FROM block_record WHERE id = :id") suspend fun deleteRecord(id: Long)
+    @Query("DELETE FROM block_record WHERE blockId = :blockId") suspend fun deleteRecords(blockId: Long)
+    @Query("SELECT * FROM block_record WHERE blockId = :blockId ORDER BY at") suspend fun records(blockId: Long): List<BlockRecord>
+    @Query("SELECT * FROM block_record WHERE albumId = :albumId ORDER BY at") fun recordsFlow(albumId: Long): Flow<List<BlockRecord>>
+    @Query("SELECT * FROM item WHERE type = 'CHECKLIST' AND albumId = :albumId ORDER BY createdAt") suspend fun checklistsInAlbum(albumId: Long): List<Item>
 }

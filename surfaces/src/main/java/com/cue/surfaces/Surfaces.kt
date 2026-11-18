@@ -60,7 +60,7 @@ import com.cue.agent.CueRuntime
 import com.cue.domain.BubbleSpec
 import com.cue.ui.CheckRow
 import com.cue.ui.Cue
-import com.cue.ui.CueOrb
+import com.cue.ui.PixelHead
 import com.cue.ui.CueTheme
 import com.cue.ui.Pill
 import com.cue.ui.PrimaryButton
@@ -79,7 +79,7 @@ object Notifier {
         if (nm.getNotificationChannel(CHANNEL) == null) nm.createNotificationChannel(NotificationChannel(CHANNEL, "Cue updates", NotificationManager.IMPORTANCE_DEFAULT))
         val pi = open?.let { PendingIntent.getActivity(context, tag.hashCode(), it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT) }
         val n = Notification.Builder(context, CHANNEL).setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle(title)
-            .setContentText(text).setStyle(Notification.BigTextStyle().bigText(text)).setColor(0xFF0D4B48.toInt()).setAutoCancel(true)
+            .setContentText(text).setStyle(Notification.BigTextStyle().bigText(text)).setColor(0xFF4B2FB5.toInt()).setAutoCancel(true)
             .apply { if (pi != null) setContentIntent(pi) }.build()
         runCatching { nm.notify(tag, 1, n) }
     }
@@ -162,18 +162,18 @@ class BubbleService : LifecycleService(), SavedStateRegistryOwner {
 @Composable
 fun BubbleCard(spec: BubbleSpec, expanded: Boolean, onToggle: () -> Unit, onDismiss: () -> Unit, onOpen: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 18.dp), horizontalAlignment = Alignment.End) {
-        Box(Modifier.clip(CircleShape).clickable(role = Role.Button, onClickLabel = "Collapse or expand") { onToggle() }) { CueOrb(58.dp, "Cue", ring = true) }
+        Box(Modifier.size(64.dp).shadow(14.dp, CircleShape, spotColor = Cue.primaryDeep).clip(CircleShape).background(Cue.night).clickable(role = Role.Button, onClickLabel = "Collapse or expand") { onToggle() }, contentAlignment = Alignment.Center) { PixelHead(60.dp) }
         if (!expanded) return@Column
         Spacer(Modifier.height(12.dp))
         Column(
-            Modifier.fillMaxWidth().shadow(30.dp, RoundedCornerShape(34.dp), spotColor = Color(0xFF0A141E)).clip(RoundedCornerShape(34.dp))
-                .background(Cue.cream).padding(18.dp),
+            Modifier.fillMaxWidth().shadow(30.dp, RoundedCornerShape(34.dp), spotColor = Cue.primaryNight).clip(RoundedCornerShape(34.dp))
+                .background(Cue.base).padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Pill(spec.placeLabel, Cue.coralTint, Cue.coralText, dot = Cue.coralDeep)
             Txt(spec.headline, Type.title)
             spec.card?.let { c ->
-                Column(Modifier.fillMaxWidth().shadow(14.dp, RoundedCornerShape(24.dp), spotColor = Color(0xFF35419C)).clip(RoundedCornerShape(24.dp)).background(Cue.tripBrush)) {
+                Column(Modifier.fillMaxWidth().shadow(14.dp, RoundedCornerShape(24.dp), spotColor = Color(0xFF3F45B8)).clip(RoundedCornerShape(24.dp)).background(Cue.tripBrush)) {
                     Row(Modifier.fillMaxWidth().padding(18.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                         Txt(c.from, Type.big.copy(fontSize = androidx.compose.ui.unit.TextUnit(30f, androidx.compose.ui.unit.TextUnitType.Sp)), Color.White)
                         Box(Modifier.size(38.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.2f)), contentAlignment = Alignment.Center) {

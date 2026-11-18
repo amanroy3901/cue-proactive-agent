@@ -90,6 +90,33 @@ class GeminiBrain(private val apiKey: String, private val isOnline: () -> Boolea
         }
     }
 
+    /**
+     * A typed conversation answered as JSON (Ask Cue's generated screens). [turns] alternate user and model text,
+     * oldest first. Text only: nothing here speaks or listens. Null when offline or the call fails.
+     */
+    suspend fun chatJson(system: String, turns: List<Pair<String, String>>, model: String = TEXT_MODEL): String? = withContext(Dispatchers.IO) {
+        if (!isReady()) return@withContext null
+        val contents = JSONArray()
+        turns.forEach { (role, text) -> contents.put(JSONObject().put("role", role).put("parts", JSONArray().put(JSONObject().put("text", text)))) }
+        val body = JSONObject()
+            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system))))
+            .put("contents", contents)
+            .put("generationConfig", JSONObject().put("responseMimeType", "application/json").put("temperature", 0.4))
+        val req = Request.Builder().url("$REST/models/$model:generateContent").header("x-goog-api-key", apiKey)
+            .post(body.toString().toRequestBody("application/json".toMediaType())).build()
+        runCatching {
+            slowHttp.newCall(req).execute().use { r ->
+                val s = r.body?.string().orEmpty()
+                if (!r.isSuccessful) { Log.w(TAG, "chatJson ${r.code}: ${s.take(300)}"); return@use null }
+                val parts = JSONObject(s).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts") ?: return@use null
+                (0 until parts.length()).joinToString("") { parts.getJSONObject(it).optString("text") }.trim()
+            }
+        }.onFailure { Log.w(TAG, "chatJson failed", it) }.getOrNull()
+    }
+
+    /** Generated screens can take longer than a one-line answer. */
+    private val slowHttp by lazy { http.newBuilder().readTimeout(60, TimeUnit.SECONDS).build() }
+
     override suspend fun release() = Unit
 
     companion object {
@@ -172,6 +199,7 @@ private class LiveSession(
             append("Tool results number what they save or list, like #14. When the user corrects something (\"no, from Muskan\", \"I meant tomorrow\"), change that same entry with the matching update tool and its number; never add a second one. ")
             append("The user can have several lists: pass the list's name when they name one, and naming a new list creates it. ")
             append("To delete something saved by mistake when you don't have its number, use forget with the user's words. ")
+            append("When a tool result starts with NEEDS or CONFIRM, nothing was done yet: ask the user the ASK question and wait for the answer. ")
             append("When the user says goodbye or is done, say a short goodbye and then call end_call. ")
             append("Always speak English (the user is in India), even if what you heard sounds like another language; if you didn't catch it, ask them to say it again.\n")
             append("What you know:\n").append(config.context)

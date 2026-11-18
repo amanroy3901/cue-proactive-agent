@@ -26,5 +26,6 @@ include(
     ":call",
     ":ingest",
     ":surfaces",
+    ":genui",
     ":app",
 )

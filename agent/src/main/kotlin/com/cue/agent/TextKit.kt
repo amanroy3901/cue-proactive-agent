@@ -65,6 +65,9 @@ object TextKit {
         }
     }
 
+    /** "a", "a and b", "a, b and c". */
+    fun joinAnd(parts: List<String>): String = when (parts.size) { 0 -> ""; 1 -> parts[0]; else -> parts.dropLast(1).joinToString(", ") + " and " + parts.last() }
+
     fun dateLabel(epoch: Long, zone: ZoneId): String =
         Instant.ofEpochMilli(epoch).atZone(zone).format(DateTimeFormatter.ofPattern("MMM d", Locale.ENGLISH))
 

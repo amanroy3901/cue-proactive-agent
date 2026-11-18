@@ -3,6 +3,7 @@ package com.cue.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -44,12 +45,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-/** Cream base with soft colour glows at the top, tinted by the moment. */
+/** Pale lavender base with soft colour glows at the top, tinted by the moment. */
 @Composable
 fun GlowBackground(
-    glowA: Color = Color(0xFFFFD3BC),
-    glowB: Color = Color(0xFFE4DCF7),
-    base: Color = Cue.cream,
+    glowA: Color = Cue.glowBlush,
+    glowB: Color = Cue.glowLavender,
+    base: Color = Cue.base,
     modifier: Modifier = Modifier,
     content: @Composable BoxScope.() -> Unit,
 ) {
@@ -69,7 +70,7 @@ fun GlowBackground(
 @Composable
 fun LiftCard(
     modifier: Modifier = Modifier,
-    tint: Color = Cue.tealDeep,
+    tint: Color = Cue.primaryDeep,
     radius: Dp = 26.dp,
     padding: Dp = 16.dp,
     background: Color = Color.White,
@@ -127,22 +128,23 @@ fun IconChip(icon: ImageVector, tint: AppTint, size: Dp = 40.dp, iconSize: Dp = 
     ) { Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(iconSize)) }
 }
 
-/** Cue's avatar: a lit teal orb. */
+/** Cue's avatar: a lit orb in the Qira ribbon colours. */
 @Composable
 fun CueOrb(size: Dp, label: String? = null, ring: Boolean = false) {
     Box(
         Modifier
             .size(size)
             .then(if (ring) Modifier.border(size * 0.07f, Color.White.copy(alpha = 0.6f), CircleShape) else Modifier)
-            .shadow(size * 0.18f, CircleShape, spotColor = Cue.tealNight)
+            .shadow(size * 0.18f, CircleShape, spotColor = Cue.primaryDeep)
             .clip(CircleShape)
-            .background(Brush.radialGradient(listOf(Color(0xFF3FB3A7), Color(0xFF147069), Cue.tealNight), center = Offset.Unspecified)),
+            .background(Cue.ribbonBrush)
+            .drawBehind { drawRect(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.35f), Color.Transparent), center = Offset(this.size.width * 0.3f, this.size.height * 0.25f), radius = this.size.width * 0.6f)) },
         contentAlignment = Alignment.Center,
     ) { if (label != null) Text(label, style = Type.title.copy(color = Color.White, fontSize = (size.value * 0.26f).let { androidx.compose.ui.unit.TextUnit(it, androidx.compose.ui.unit.TextUnitType.Sp) })) }
 }
 
 @Composable
-fun PrimaryButton(text: String, modifier: Modifier = Modifier, brush: Brush = Cue.tealButton, shadow: Color = Cue.tealDeep, icon: ImageVector? = null, height: Dp = 58.dp, textColor: Color = Color.White, onClick: () -> Unit) {
+fun PrimaryButton(text: String, modifier: Modifier = Modifier, brush: Brush = Cue.primaryButton, shadow: Color = Cue.primaryDeep, icon: ImageVector? = null, height: Dp = 58.dp, textColor: Color = Color.White, onClick: () -> Unit) {
     Row(
         modifier
             .height(height)
@@ -160,7 +162,7 @@ fun PrimaryButton(text: String, modifier: Modifier = Modifier, brush: Brush = Cu
 }
 
 @Composable
-fun SoftButton(text: String, modifier: Modifier = Modifier, color: Color = Color(0xFFEDE7DE), textColor: Color = Cue.ink, height: Dp = 52.dp, onClick: () -> Unit) {
+fun SoftButton(text: String, modifier: Modifier = Modifier, color: Color = Cue.primaryTint, textColor: Color = Cue.ink, height: Dp = 52.dp, onClick: () -> Unit) {
     Box(
         modifier.height(height).clip(CircleShape).background(color).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 18.dp),
         contentAlignment = Alignment.Center,
@@ -178,16 +180,18 @@ fun Pill(text: String, background: Color, color: Color, modifier: Modifier = Mod
     }
 }
 
-/** A tickable list row: rounded square box, teal when done. */
+/** A tickable list row: rounded square box, filled with the Qira ribbon when done. */
 @Composable
-fun CheckRow(text: String, checked: Boolean, onToggle: () -> Unit, dark: Boolean = false, highlight: Boolean = false) {
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+fun CheckRow(text: String, checked: Boolean, onToggle: () -> Unit, dark: Boolean = false, highlight: Boolean = false, onLongPress: (() -> Unit)? = null) {
     Row(
         Modifier
             .fillMaxWidth()
             .height(48.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(if (highlight) Color(0xFFE6F5F1) else Color.Transparent)
-            .clickable(role = Role.Checkbox, onClick = onToggle)
+            .background(if (highlight) Cue.primaryTint else Color.Transparent)
+            .then(if (onLongPress != null) Modifier.combinedClickable(role = Role.Checkbox, onClick = onToggle, onLongClick = onLongPress, onLongClickLabel = "Edit")
+                else Modifier.clickable(role = Role.Checkbox, onClick = onToggle))
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -195,8 +199,8 @@ fun CheckRow(text: String, checked: Boolean, onToggle: () -> Unit, dark: Boolean
             Modifier
                 .size(22.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(if (checked) Cue.tealBrush else Brush.linearGradient(listOf(Color(0xFFFBFAF7), Color(0xFFFBFAF7))))
-                .then(if (!checked) Modifier.border(2.dp, Color(0xFFA7B3B1), RoundedCornerShape(8.dp)) else Modifier),
+                .background(if (checked) Cue.primaryBrush else Brush.linearGradient(listOf(Color(0xFFFBFAFF), Color(0xFFFBFAFF))))
+                .then(if (!checked) Modifier.border(2.dp, Color(0xFFADA6C4), RoundedCornerShape(8.dp)) else Modifier),
             contentAlignment = Alignment.Center,
         ) { if (checked) Icon(Icons.Rounded.Check, null, tint = Color.White, modifier = Modifier.size(14.dp)) }
         Spacer(Modifier.width(14.dp))
@@ -209,7 +213,7 @@ fun CheckRow(text: String, checked: Boolean, onToggle: () -> Unit, dark: Boolean
 }
 
 @Composable
-fun BackHeader(title: String, subtitle: String?, onBack: () -> Unit, glow: Color = Cue.tealDeep) {
+fun BackHeader(title: String, subtitle: String?, onBack: () -> Unit, glow: Color = Cue.primaryDeep) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier.size(44.dp).shadow(6.dp, CircleShape, spotColor = glow.copy(alpha = 0.3f)).clip(CircleShape).background(Color.White.copy(alpha = 0.85f))
@@ -241,7 +245,7 @@ fun CueBottomBar(left: List<NavEntry>, right: List<NavEntry>, selected: String, 
         Row(
             Modifier
                 .fillMaxWidth()
-                .shadow(20.dp, RoundedCornerShape(36.dp), spotColor = Cue.tealDeep.copy(alpha = 0.35f))
+                .shadow(20.dp, RoundedCornerShape(36.dp), spotColor = Cue.primaryDeep.copy(alpha = 0.35f))
                 .clip(RoundedCornerShape(36.dp))
                 .background(Color.White.copy(alpha = 0.92f))
                 .border(1.dp, Color.White, RoundedCornerShape(36.dp))
@@ -258,12 +262,12 @@ fun CueBottomBar(left: List<NavEntry>, right: List<NavEntry>, selected: String, 
                 .align(Alignment.TopCenter)
                 .offset(y = (-18).dp)
                 .size(64.dp)
-                .shadow(14.dp, CircleShape, spotColor = Cue.tealDeep)
+                .shadow(14.dp, CircleShape, spotColor = Cue.primaryDeep)
                 .clip(CircleShape)
-                .background(Cue.cream)
+                .background(Cue.base)
                 .padding(4.dp)
                 .clip(CircleShape)
-                .background(Brush.radialGradient(listOf(Cue.tealLight, Cue.tealDeep)))
+                .background(Cue.ribbonBrush)
                 .clickable(role = Role.Button, onClickLabel = "Talk to Cue", onClick = onTalk),
             contentAlignment = Alignment.Center,
         ) { Icon(Icons.Rounded.Mic, contentDescription = "Talk to Cue", tint = Color.White, modifier = Modifier.size(26.dp)) }
@@ -277,10 +281,10 @@ private fun RowScope.NavItem(e: NavEntry, selected: Boolean, onClick: () -> Unit
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
-            Modifier.width(48.dp).height(30.dp).clip(CircleShape).background(if (selected) Cue.tealTint else Color.Transparent),
+            Modifier.width(48.dp).height(30.dp).clip(CircleShape).background(if (selected) Cue.primaryTint else Color.Transparent),
             contentAlignment = Alignment.Center,
-        ) { Icon(e.icon, contentDescription = null, tint = if (selected) Cue.tealDeep else Cue.muted, modifier = Modifier.size(22.dp)) }
-        Text(e.label, style = Type.tiny.copy(color = if (selected) Cue.tealDeep else Cue.muted, fontWeight = if (selected) androidx.compose.ui.text.font.FontWeight(800) else androidx.compose.ui.text.font.FontWeight(600)), maxLines = 1)
+        ) { Icon(e.icon, contentDescription = null, tint = if (selected) Cue.primaryDeep else Cue.muted, modifier = Modifier.size(22.dp)) }
+        Text(e.label, style = Type.tiny.copy(color = if (selected) Cue.primaryDeep else Cue.muted, fontWeight = if (selected) androidx.compose.ui.text.font.FontWeight(800) else androidx.compose.ui.text.font.FontWeight(600)), maxLines = 1)
     }
 }
 

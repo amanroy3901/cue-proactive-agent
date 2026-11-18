@@ -1,0 +1,164 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;height:100%;background:transparent;overflow:hidden}
+body{margin:0}
+.fig,.head,.armL,.armR,.earL,.earR,.blink{transform-box:view-box}
+.breathe{animation:breathe 3.2s ease-in-out infinite}
+.bob{animation:bob 1.2s ease-in-out infinite}
+.hop{animation:hop .9s ease-in-out infinite}
+.headIdle{animation:headIdle 4s ease-in-out infinite}
+.headWave{animation:headWave 1.2s ease-in-out infinite}
+.headTilt{animation:headTilt 3s ease-in-out infinite}
+.headNod{animation:headNod 1.1s ease-in-out infinite}
+.blink{animation:blink 4.2s infinite}
+.earsIdle.earL{animation:earL 3s ease-in-out infinite}
+.earsIdle.earR{animation:earR 3s ease-in-out .3s infinite}
+.earsHappy.earL{animation:earL .6s ease-in-out infinite}
+.earsHappy.earR{animation:earR .6s ease-in-out .1s infinite}
+.earsPerk.earL{animation:perkL 1.5s ease-in-out infinite}
+.earsPerk.earR{animation:perkR 1.5s ease-in-out infinite}
+.earsFlap.earL{animation:flapL .45s ease-in-out infinite}
+.earsFlap.earR{animation:flapR .45s ease-in-out infinite}
+.swayL{animation:swayL 3.2s ease-in-out infinite}
+.swayR{animation:swayR 3.2s ease-in-out infinite}
+.waveFore{transform-box:view-box;animation:waveFore 1s ease-in-out infinite}
+.cupHand{transform-box:view-box;animation:cupHand 2.6s ease-in-out infinite}
+.headListen{animation:headListen 2.6s ease-in-out infinite}
+.earsListen.earL{animation:inL 2.6s ease-in-out infinite}
+.earsListen.earR{animation:inR 2.6s ease-in-out infinite}
+.gestL{animation:gestL 2.2s ease-in-out infinite}
+.gestR{animation:gestR 2.2s ease-in-out .3s infinite}
+.cheerL{transform-box:view-box;animation:cheerL .9s ease-in-out infinite}
+.cheerR{transform-box:view-box;animation:cheerR .9s ease-in-out infinite}
+.bar{transform-box:fill-box;transform-origin:center;animation:bar .4s ease-in-out infinite alternate}
+.lvl{transform-box:fill-box;transform-origin:center;animation:bar .7s ease-in-out infinite alternate}
+.spark{transform-box:view-box;animation:spark 1.2s ease-in-out infinite}
+.sw{animation:sw 1.6s ease-out infinite}
+@keyframes breathe{0%,100%{transform:scale(1,1)}50%{transform:scale(1.012,.988)}}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+@keyframes hop{0%,100%{transform:translateY(0) scale(1.04,.96)}15%{transform:translateY(0) scale(1.06,.94)}45%{transform:translateY(-34px) scale(.97,1.04)}72%{transform:translateY(0) scale(1.07,.93)}86%{transform:translateY(0) scale(.99,1.01)}}
+@keyframes headIdle{0%,100%{transform:rotate(0) translateY(0)}30%{transform:rotate(-2deg) translateY(-2px)}65%{transform:rotate(2deg) translateY(-1px)}}
+@keyframes headWave{0%,100%{transform:rotate(4deg)}50%{transform:rotate(7deg)}}
+@keyframes headTilt{0%,100%{transform:rotate(-7deg)}50%{transform:rotate(-10deg) translateY(2px)}}
+@keyframes headNod{0%,100%{transform:rotate(0) translateY(0)}40%{transform:rotate(1.5deg) translateY(3px)}}
+@keyframes blink{0%,90%,100%{transform:scaleY(1)}94%{transform:scaleY(.08)}}
+@keyframes earL{0%,100%{transform:rotate(0)}50%{transform:rotate(-6deg)}}
+@keyframes earR{0%,100%{transform:rotate(0)}50%{transform:rotate(6deg)}}
+@keyframes perkL{0%,100%{transform:rotate(10deg)}50%{transform:rotate(14deg)}}
+@keyframes perkR{0%,100%{transform:rotate(-10deg)}50%{transform:rotate(-14deg)}}
+@keyframes flapL{0%,100%{transform:rotate(-12deg)}50%{transform:rotate(6deg)}}
+@keyframes flapR{0%,100%{transform:rotate(12deg)}50%{transform:rotate(-6deg)}}
+@keyframes swayL{0%,100%{transform:rotate(0)}50%{transform:rotate(3deg)}}
+@keyframes swayR{0%,100%{transform:rotate(0)}50%{transform:rotate(-3deg)}}
+@keyframes waveFore{0%,100%{transform:rotate(-14deg)}50%{transform:rotate(14deg)}}
+@keyframes cupHand{0%,100%{transform:rotate(0deg)}50%{transform:rotate(-5deg)}}
+@keyframes headListen{0%,100%{transform:rotate(-7deg)}50%{transform:rotate(-9deg) translateY(1px)}}
+@keyframes inL{0%,100%{transform:rotate(24deg)}50%{transform:rotate(30deg)}}
+@keyframes inR{0%,100%{transform:rotate(-24deg)}50%{transform:rotate(-30deg)}}
+@keyframes gestL{0%,100%{transform:rotate(0)}40%{transform:rotate(18deg)}70%{transform:rotate(8deg)}}
+@keyframes gestR{0%,100%{transform:rotate(0)}40%{transform:rotate(-26deg)}70%{transform:rotate(-10deg)}}
+@keyframes cheerL{0%,100%{transform:rotate(0deg)}45%{transform:rotate(-10deg)}}
+@keyframes cheerR{0%,100%{transform:rotate(0deg)}45%{transform:rotate(10deg)}}
+@keyframes bar{from{transform:scaleY(.3)}to{transform:scaleY(1)}}
+@keyframes spark{0%,100%{opacity:0;transform:scale(.3)}50%{opacity:1;transform:scale(1)}}
+@keyframes sw{0%{opacity:0}30%{opacity:1}100%{opacity:0}}
+.still svg *{animation:none !important}
+@media (prefers-reduced-motion: reduce){svg *{animation:none !important}}
+ *{animation:none !important}</style></head><body><div style="width:100%;height:100%"><svg width="0" height="0" style="position: absolute" aria-hidden="true"><defs>
+  <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="5"/></filter>
+  <filter id="glowS" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.4"/></filter>
+  <filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="9"/></filter>
+  <radialGradient id="shell" cx=".38" cy=".3" r=".8">
+    <stop offset="0" stop-color="#FFFFFF"/><stop offset=".45" stop-color="#F5F1FD"/><stop offset=".8" stop-color="#DCD2F3"/><stop offset="1" stop-color="#BFAEE6"/>
+  </radialGradient>
+  <radialGradient id="shellBody" gradientUnits="userSpaceOnUse" cx="186" cy="318" r="120">
+    <stop offset="0" stop-color="#FFFFFF"/><stop offset=".5" stop-color="#F2EDFC"/><stop offset=".85" stop-color="#D6CBF0"/><stop offset="1" stop-color="#B9A8E3"/>
+  </radialGradient>
+  <linearGradient id="rim" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#C08CFF"/><stop offset=".25" stop-color="#C08CFF" stop-opacity="0"/><stop offset=".8" stop-color="#7FB8FF" stop-opacity="0"/><stop offset="1" stop-color="#9FC8FF"/>
+  </linearGradient>
+  <linearGradient id="visor" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#241B47"/><stop offset=".5" stop-color="#110C24"/><stop offset="1" stop-color="#07050F"/></linearGradient>
+  <linearGradient id="ear" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E9DDFF"/><stop offset=".45" stop-color="#B98CFF"/><stop offset="1" stop-color="#7FA8FF"/></linearGradient>
+  <linearGradient id="earR" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#E9DDFF"/><stop offset=".45" stop-color="#B98CFF"/><stop offset="1" stop-color="#7FA8FF"/></linearGradient>
+  <linearGradient id="cup" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3A2C78"/><stop offset="1" stop-color="#16102F"/></linearGradient>
+  <linearGradient id="ring" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#B48CFF"/><stop offset="1" stop-color="#63C8FF"/></linearGradient>
+  <linearGradient id="strap" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3A2780"/><stop offset="1" stop-color="#241650"/></linearGradient>
+  <radialGradient id="red" cx=".35" cy=".3" r=".75"><stop offset="0" stop-color="#FF8A8A"/><stop offset=".5" stop-color="#F2353F"/><stop offset="1" stop-color="#A3121C"/></radialGradient>
+  <radialGradient id="bg" cx=".5" cy=".42" r=".7"><stop offset="0" stop-color="#4A2A94"/><stop offset=".55" stop-color="#241250"/><stop offset="1" stop-color="#120A28"/></radialGradient>
+  <radialGradient id="floor" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#9A6BFF" stop-opacity=".7"/><stop offset="1" stop-color="#9A6BFF" stop-opacity="0"/></radialGradient>
+  <clipPath id="torso"><path d="M140 300 C152 288 248 288 260 300 C274 316 278 346 272 370 C266 394 244 406 200 406 C156 406 134 394 128 370 C122 346 126 316 140 300 Z"/></clipPath>
+</defs></svg><svg viewBox="62 28 276 276" style="display:block;width:100vw;height:100vh" role="img" aria-label="Pixel: idle">
+
+
+<!-- floor ring -->
+<ellipse cx="200" cy="448" rx="150" ry="26" fill="url(#floor)"/>
+<g filter="url(#glowS)" opacity=".9"><ellipse cx="200" cy="448" rx="118" ry="17" fill="none" stroke="#B48CFF" stroke-width="4"/><ellipse cx="200" cy="448" rx="92" ry="12" fill="none" stroke="#63C8FF" stroke-width="2.5"/></g>
+<ellipse cx="200" cy="448" rx="118" ry="17" fill="none" stroke="#D2B8FF" stroke-width="2"/>
+<ellipse cx="200" cy="448" rx="92" ry="12" fill="none" stroke="#8FDCFF" stroke-width="1.4"/>
+<ellipse cx="200" cy="442" rx="72" ry="9" fill="#120A28" opacity=".45"/>
+
+<g class="fig breathe" style="transform-origin:200px 446px"><g class="armL swayL" style="transform-origin:146px 322px"><path d="M146 322 C132 340 122 362 120 386" fill="none" stroke="#C4B4EA" stroke-width="42" stroke-linecap="round"/>
+<path d="M146 322 C132 340 122 362 120 386" fill="none" stroke="url(#shellBody)" stroke-width="37" stroke-linecap="round"/></g><g class="armR swayR" style="transform-origin:254px 322px"><path d="M254 322 C268 340 278 362 280 386" fill="none" stroke="#C4B4EA" stroke-width="42" stroke-linecap="round"/>
+<path d="M254 322 C268 340 278 362 280 386" fill="none" stroke="url(#shellBody)" stroke-width="37" stroke-linecap="round"/></g><path d="M178 396 L176 430" stroke="#C4B4EA" stroke-width="44" stroke-linecap="round"/>
+<path d="M178 396 L176 430" stroke="url(#shellBody)" stroke-width="39" stroke-linecap="round"/>
+<path d="M222 396 L224 430" stroke="#C4B4EA" stroke-width="44" stroke-linecap="round"/>
+<path d="M222 396 L224 430" stroke="url(#shellBody)" stroke-width="39" stroke-linecap="round"/>
+<!-- feet -->
+<path d="M142 438 C142 422 166 416 184 420 C198 423 202 436 196 444 C184 452 150 452 142 444 Z" fill="url(#shellBody)" stroke="#C4B4EA" stroke-width="2.5"/>
+<path d="M148 445 C162 451 182 451 196 444" stroke="#7B4FE0" stroke-width="4" fill="none" stroke-linecap="round" opacity=".7"/>
+<path d="M258 438 C258 422 234 416 216 420 C202 423 198 436 204 444 C216 452 250 452 258 444 Z" fill="url(#shellBody)" stroke="#C4B4EA" stroke-width="2.5"/>
+<path d="M252 445 C238 451 218 451 204 444" stroke="#7B4FE0" stroke-width="4" fill="none" stroke-linecap="round" opacity=".7"/>
+
+<!-- ===== BODY ===== -->
+<path d="M140 300 C152 288 248 288 260 300 C274 316 278 346 272 370 C266 394 244 406 200 406 C156 406 134 394 128 370 C122 346 126 316 140 300 Z"
+      fill="url(#shellBody)" stroke="#C4B4EA" stroke-width="2.5"/>
+<path d="M140 300 C152 288 248 288 260 300 C274 316 278 346 272 370 C266 394 244 406 200 406 C156 406 134 394 128 370 C122 346 126 316 140 300 Z"
+      fill="none" stroke="url(#rim)" stroke-width="3" opacity=".9"/>
+<ellipse cx="200" cy="300" rx="70" ry="15" fill="#7C66C2" opacity=".35" filter="url(#glowS)"/>
+<path d="M150 298 C172 310 228 310 250 298 C246 288 154 288 150 298 Z" fill="#8B5CF6"/>
+
+<!-- backpack straps: over each shoulder, then curving round the side to the bag (clipped to the body) -->
+<g clip-path="url(#torso)">
+  <path d="M164 290 C162 310 156 330 120 350" stroke="url(#strap)" stroke-width="13" fill="none" stroke-linecap="round"/>
+  <path d="M236 290 C238 310 244 330 280 350" stroke="url(#strap)" stroke-width="13" fill="none" stroke-linecap="round"/>
+  <path d="M166 298 C165 312 160 326 140 340" stroke="#5A45A8" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <path d="M234 298 C235 312 240 326 260 340" stroke="#5A45A8" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+</g>
+<rect x="154" y="306" width="18" height="13" rx="4" fill="#6A48D0" stroke="#241650" stroke-width="2"/>
+<rect x="228" y="306" width="18" height="13" rx="4" fill="#6A48D0" stroke="#241650" stroke-width="2"/>
+
+<path d="M132 378 C164 398 236 398 268 378" stroke="#D9CEF4" stroke-width="2.5" fill="none"/>
+<ellipse cx="180" cy="336" rx="18" ry="10" fill="#FFFFFF" opacity=".6"/>
+<!-- red chest light, centred -->
+<circle cx="200" cy="344" r="20" fill="#FF4D5C" opacity=".35" filter="url(#glowS)"/>
+<circle cx="200" cy="344" r="12" fill="url(#red)"/>
+<ellipse cx="196" cy="339" rx="4.5" ry="3" fill="#FFFFFF" opacity=".85"/>
+
+<g class="armL swayL" style="transform-origin:146px 322px"><path d="M98 390 C94 410 104 426 122 426 C140 426 148 412 144 396 C146 388 140 382 134 384 C128 379 118 379 114 384 C106 380 100 382 98 390 Z"
+      fill="url(#shellBody)" stroke="#C4B4EA" stroke-width="2.5" stroke-linejoin="round"/>
+<path d="M126 386 C128 396 128 404 124 410" stroke="#D9CEF4" stroke-width="2" fill="none" stroke-linecap="round"/>
+</g><g class="armR swayR" style="transform-origin:254px 322px"><path d="M302 390 C306 410 296 426 278 426 C260 426 252 412 256 396 C254 388 260 382 266 384 C272 379 282 379 286 384 C294 380 300 382 302 390 Z"
+      fill="url(#shellBody)" stroke="#C4B4EA" stroke-width="2.5" stroke-linejoin="round"/>
+<path d="M274 386 C272 396 272 404 276 410" stroke="#D9CEF4" stroke-width="2" fill="none" stroke-linecap="round"/>
+
+</g><g class="head headIdle" style="transform-origin:200px 298px"><g class="earsIdle earL" style="transform-origin:184px 120px"><g filter="url(#glow)" opacity=".55"><path d="M184 116 C164 86 122 48 92 52 C72 56 78 86 110 104 C136 118 166 122 184 120 Z" fill="#B48CFF"/></g><path d="M184 116 C164 86 122 48 92 52 C72 56 78 86 110 104 C136 118 166 122 184 120 Z" fill="url(#ear)"/><path d="M98 62 C120 64 152 90 176 112" stroke="#FFFFFF" stroke-width="5" fill="none" stroke-linecap="round" opacity=".55"/></g><g class="earsIdle earR" style="transform-origin:216px 120px"><g filter="url(#glow)" opacity=".55"><path d="M216 116 C226 86 252 44 278 40 C296 40 292 70 274 92 C258 110 234 120 216 120 Z" fill="#B48CFF"/></g><path d="M216 116 C226 86 252 44 278 40 C296 40 292 70 274 92 C258 110 234 120 216 120 Z" fill="url(#earR)"/><path d="M228 108 C238 84 256 60 274 50" stroke="#FFFFFF" stroke-width="4.5" fill="none" stroke-linecap="round" opacity=".55"/></g><path d="M184 126 C184 112 216 112 216 126 C212 134 188 134 184 126 Z" fill="#9FD0FF" opacity=".9"/><!-- helmet -->
+<path d="M200 116 C272 116 316 154 316 208 C316 262 272 298 200 298 C128 298 84 262 84 208 C84 154 128 116 200 116 Z" fill="url(#shell)"/>
+<path d="M200 116 C272 116 316 154 316 208 C316 262 272 298 200 298 C128 298 84 262 84 208 C84 154 128 116 200 116 Z" fill="none" stroke="url(#rim)" stroke-width="4"/>
+<ellipse cx="140" cy="146" rx="34" ry="13" transform="rotate(-22 140 146)" fill="#FFFFFF" opacity=".9"/>
+<path d="M150 128 Q200 116 250 128" stroke="#E3DBF6" stroke-width="2.5" fill="none"/>
+
+<!-- visor -->
+<path d="M114 182 C118 156 152 148 200 148 C248 148 282 156 286 182 C290 206 290 232 282 248 C270 268 236 274 200 274 C164 274 130 268 118 248 C110 232 110 206 114 182 Z" fill="#EAE3FA"/>
+<path d="M120 186 C124 162 156 155 200 155 C244 155 276 162 280 186 C284 208 284 230 276 244 C265 262 234 267 200 267 C166 267 135 262 124 244 C116 230 116 208 120 186 Z" fill="url(#visor)"/>
+<path d="M140 176 C168 160 232 160 260 176 C244 184 222 186 200 186 C178 186 156 184 140 176 Z" fill="#FFFFFF" opacity=".12"/>
+
+<g class="blink" style="transform-origin:200px 212px"><g filter="url(#glow)" opacity=".85"><ellipse cx="164" cy="212" rx="13" ry="17" fill="#5EE9FF"/><ellipse cx="236" cy="212" rx="13" ry="17" fill="#5EE9FF"/></g><ellipse cx="164" cy="212" rx="11" ry="15" fill="#A8F4FF"/><ellipse cx="236" cy="212" rx="11" ry="15" fill="#A8F4FF"/><circle cx="168" cy="205" r="4" fill="#FFFFFF"/><circle cx="240" cy="205" r="4" fill="#FFFFFF"/></g><path d="M191 240 Q200 248 209 240" stroke="#B57BFF" stroke-width="4" fill="none" stroke-linecap="round"/><!-- headphone cups, one each side -->
+<g>
+  <ellipse cx="86" cy="214" rx="17" ry="38" fill="url(#cup)"/>
+  <g filter="url(#glowS)"><ellipse cx="84" cy="214" rx="11" ry="30" fill="none" stroke="url(#ring)" stroke-width="5"/></g>
+  <ellipse cx="84" cy="214" rx="11" ry="30" fill="none" stroke="url(#ring)" stroke-width="3.5"/>
+  <circle cx="84" cy="214" r="4.5" fill="url(#red)"/>
+  <ellipse cx="314" cy="214" rx="17" ry="38" fill="url(#cup)"/>
+  <g filter="url(#glowS)"><ellipse cx="316" cy="214" rx="11" ry="30" fill="none" stroke="url(#ring)" stroke-width="5"/></g>
+  <ellipse cx="316" cy="214" rx="11" ry="30" fill="none" stroke="url(#ring)" stroke-width="3.5"/>
+  <circle cx="316" cy="214" r="4.5" fill="url(#red)"/>
+</g>
+</g></g></svg></div></body></html>

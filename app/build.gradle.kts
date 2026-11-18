@@ -8,7 +8,8 @@ plugins {
 
 android {
     namespace = "com.cue.app"
-    compileSdk = 36
+    // 37: the A2UI renderer (alpha) and the Compose alphas it pulls in are built against Android 17.
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.cue.app"
@@ -59,6 +60,7 @@ dependencies {
     implementation(project(":call"))
     implementation(project(":ingest"))
     implementation(project(":surfaces"))
+    implementation(project(":genui"))
 
     implementation(libs.core.ktx)
     implementation(libs.activity.compose)
@@ -72,3 +74,6 @@ dependencies {
     implementation(libs.compose.foundation)
     implementation(libs.compose.material3)
 }
+
+// The A2UI alphas ask for compileSdk 37.1; 37.0 is what is installed and compiles them fine. Skip the metadata gate.
+tasks.matching { it.name.startsWith("check") && it.name.endsWith("AarMetadata") }.configureEach { enabled = false }

@@ -1,5 +1,5 @@
 <resources>
-    <color name="cream">#F7F3EC</color>
-    <color name="teal">#0D4B48</color>
-    <color name="tealLight">#2A9A90</color>
+    <color name="base">#F5F3FF</color>
+    <color name="primaryDeep">#4B2FB5</color>
+    <color name="primary">#6C4FD6</color>
 </resources>

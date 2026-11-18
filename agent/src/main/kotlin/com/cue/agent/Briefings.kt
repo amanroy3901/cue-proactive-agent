@@ -65,11 +65,13 @@ class Briefings(private val env: CueEngine) {
                 f.accountability?.let { append("$it. ") }
                 f.expiring?.let { append("Heads up, your $it. ") }
                 if (f.flight == null && f.open.isEmpty() && f.dosesToday == 0) append("Nothing urgent today. ")
+                StandingRules(env).fire(com.cue.domain.RuleTrigger.MORNING).forEach { append("You asked me to tell you: ${it.text}. ") }
                 append("Anything to add?")
             }
             ReminderKind.CHECKIN_NIGHT -> buildString {
                 append("Hi $name, how did today go? ")
                 if (f.open.isNotEmpty()) append("You still have ${f.open.joinToString(" and ")} on your list. ")
+                StandingRules(env).fire(com.cue.domain.RuleTrigger.NIGHT).forEach { append("You asked me to tell you: ${it.text}. ") }
                 append("Anything to remember for tomorrow?")
             }
             ReminderKind.LEAVE_BY -> buildString {
@@ -79,8 +81,9 @@ class Briefings(private val env: CueEngine) {
             }
             ReminderKind.DOSE -> {
                 val med = rem?.meta?.let { runCatching { JSONObject(it).optString("medicine") }.getOrNull() }.orEmpty().ifBlank { "your medicine" }
+                val food = rem?.itemId?.let { dao.item(it) }?.let { PlanSpec.of(it).food }.orEmpty()
                 if ((rem?.attempts ?: 0) > 0) "You missed your ${TextKit.clock(rem!!.fireAt, zone)} dose of $med. Did you take it?"
-                else "Time for $med. Have you taken it?"
+                else "Time for $med${if (food.isNotBlank()) ", $food food" else ""}. Have you taken it?"
             }
             ReminderKind.CARE -> "Namaste $name. ${rem?.text ?: "Did you take your medicine"}?"
             ReminderKind.EXPIRY -> {
@@ -92,9 +95,15 @@ class Briefings(private val env: CueEngine) {
             ReminderKind.ACCOUNTABILITY -> {
                 val habit = rem?.habitId?.let { dao.habit(it) }
                 val streak = habit?.let { env.streak(it.id) } ?: 0
-                "It's ${TextKit.clock(now, zone)}. ${rem?.text?.let { checkQuestion(it) } ?: "Did you do it?"}" +
+                val q = if (rem?.key?.startsWith("habit:") == true && habit != null) checkQuestion(habit.name) else rem?.text?.let { checkQuestion(it) }
+                "It's ${TextKit.clock(now, zone)}. ${q ?: "Did you do it?"}" +
                     if (streak > 0) " You're on a $streak-day streak." else ""
             }
+            ReminderKind.MEASURE -> {
+                val kind = rem?.meta?.let { runCatching { JSONObject(it).optString("measure") }.getOrNull() }.orEmpty()
+                "Hi $name, time to check your ${MeasureWords.name(kind)}. Tell me the reading when you have it."
+            }
+            ReminderKind.FOLLOW_UP -> "Hi $name, checking back like I said. ${rem?.text?.trimEnd('.', '?')?.let { if (it.endsWith("?") || it.startsWith("Your") || it.startsWith("You")) "$it?" else "How did it go: ${it.replaceFirstChar { c -> c.lowercase() }}?" } ?: "How did it go?"}"
             ReminderKind.PRACTICE -> "Hi $name, it's English practice time. Five minutes. Tell me, what did you do today?"
             "TALK" -> "Hi $name, I'm listening."
             else -> rem?.text?.let { "Hi $name. $it." } ?: "Hi $name."
@@ -108,6 +117,9 @@ class Briefings(private val env: CueEngine) {
         return when {
             "gym" in t -> "Did you go to the gym today?"
             "study" in t -> "Did you study tonight?"
+            "walk" in t -> "Did you go for your walk today?"
+            "read" in t -> "Did you read today?"
+            t.split(" ").size == 1 -> "Did you get your ${t.trimEnd('.', '?')} done today?"
             else -> "Did you ${t.removePrefix("to ").trimEnd('.', '?')}?"
         }
     }
@@ -126,6 +138,21 @@ class Briefings(private val env: CueEngine) {
             if (f.open.isNotEmpty()) appendLine("Open list: " + f.open.mapIndexed { i, s -> "${i + 1}. $s" }.joinToString("; "))
             f.lastNight?.let { appendLine("Last night: ${it.take(160)}") }
             f.expiring?.let { appendLine("Expiring: $it") }
+            // Always-loaded profile: small and capped, so it fits even the on-device model's budget.
+            val profile = Profile(env).lines(10)
+            if (profile.isNotEmpty()) appendLine("About the user (in the user's own words, \"I\" is the user): " + profile.joinToString("; ").take(700))
+            val plans = dao.plans().filter { PlanSpec.of(it).active }
+            if (plans.isNotEmpty()) appendLine("Tracking: " + plans.take(5).joinToString("; ") { planLine(it) })
+            val rules = dao.activeRules()
+            if (rules.isNotEmpty()) appendLine("Standing rules: " + rules.take(5).joinToString("; ") { StandingRules(env).describe(it) })
+            // Spaces the user made (not the auto-filed albums), soonest first: what space tools act on by default.
+            val spaces = dao.albums().filter { !it.autoCreated && (it.endAt ?: it.startAt ?: Long.MAX_VALUE) > now - 86_400_000 }.sortedBy { it.startAt ?: Long.MAX_VALUE }.take(3)
+            if (spaces.isNotEmpty()) {
+                val lines = mutableListOf<String>()
+                for (sp in spaces) lines += sp.title + (sp.startAt?.let { " from ${TextKit.dateLabel(it, zone)}" } ?: "") +
+                    " (" + dao.blocks(sp.id).joinToString(", ") { it.title.lowercase() } + ")"
+                appendLine("Spaces: " + lines.joinToString("; "))
+            }
         }.trim()
     }
 }

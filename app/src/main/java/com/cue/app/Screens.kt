@@ -49,7 +49,7 @@ import java.util.Locale
 // ------------------------------------------------------------------ shared pieces
 
 @Composable
-fun Page(glowA: Color = Color(0xFFFFD3BC), glowB: Color = Color(0xFFE4DCF7), base: Color = Cue.cream, content: LazyListScope.() -> Unit) {
+fun Page(glowA: Color = Cue.glowBlush, glowB: Color = Cue.glowLavender, base: Color = Cue.base, content: LazyListScope.() -> Unit) {
     GlowBackground(glowA, glowB, base) {
         LazyColumn(
             Modifier.fillMaxSize().statusBarsPadding(),
@@ -76,7 +76,7 @@ fun ticketFields(item: Item?): JSONObject = runCatching { JSONObject(item?.field
 
 @Composable
 fun RoundIconButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
-    Box(Modifier.size(44.dp).shadow(6.dp, CircleShape, spotColor = Color(0xFF7A5A4C).copy(alpha = 0.3f)).clip(CircleShape).background(Color.White.copy(alpha = 0.85f))
+    Box(Modifier.size(44.dp).shadow(6.dp, CircleShape, spotColor = Cue.primaryDeep.copy(alpha = 0.3f)).clip(CircleShape).background(Color.White.copy(alpha = 0.85f))
         .clickable(role = Role.Button, onClickLabel = label, onClick = onClick), contentAlignment = Alignment.Center) {
         Icon(icon, label, tint = Cue.ink, modifier = Modifier.size(20.dp))
     }
@@ -86,7 +86,7 @@ fun RoundIconButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label
 fun TripPass(ticket: Item, compact: Boolean = false, onClick: (() -> Unit)? = null) {
     val f = ticketFields(ticket)
     val from = f.optString("from", "—"); val to = f.optString("to", "—")
-    GradientCard(Cue.tripBrush, Color(0xFF35419C), Modifier.fillMaxWidth(), radius = 28.dp, padding = 0.dp, onClick = onClick) {
+    GradientCard(Cue.tripBrush, Color(0xFF3F45B8), Modifier.fillMaxWidth(), radius = 28.dp, padding = 0.dp, onClick = onClick) {
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Txt("Boarding pass" + (f.optString("flight").takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""), Type.smallStrong, Color(0xFFE3E7FF))
             Txt(ticket.eventStart?.let { TextKit.clock(it, zone) } ?: "", Type.smallStrong, Color.White)
@@ -107,7 +107,7 @@ fun TripPass(ticket: Item, compact: Boolean = false, onClick: (() -> Unit)? = nu
 }
 
 @Composable
-fun ChecklistCard(title: String, list: List<ChecklistEntry>, tint: Color = Color(0xFF33408C), header: (@Composable () -> Unit)? = null, onToggle: (ChecklistEntry) -> Unit) {
+fun ChecklistCard(title: String, list: List<ChecklistEntry>, tint: Color = Cue.primaryDeep, header: (@Composable () -> Unit)? = null, onToggle: (ChecklistEntry) -> Unit) {
     LiftCard(Modifier.fillMaxWidth(), tint = tint, radius = 28.dp, padding = 6.dp) {
         if (header != null) header() else Row(Modifier.fillMaxWidth().height(46.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             IconChip(Icons.Rounded.Checklist, AppTints.lists, 30.dp, 15.dp)
@@ -161,27 +161,27 @@ fun HomeScreen(a: MainActivity, nav: Nav) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Txt(java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("EEEE, MMM d", Locale.ENGLISH)), Type.smallStrong, Color(0xFF7A5A4C))
+                    Txt(java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("EEEE, MMM d", Locale.ENGLISH)), Type.smallStrong, Cue.primary)
                     Txt("${greeting()}, ${a.cue.settings.userName}", Type.title.copy(fontSize = sp(24f)))
                 }
                 RoundIconButton(Icons.Rounded.Tune, "Settings") { nav.go("settings") }
             }
         }
         item {
-            GradientCard(Brush.linearGradient(listOf(Cue.teal, Cue.tealDeep, Cue.tealNight)), Cue.tealNight, Modifier.fillMaxWidth(), radius = 32.dp, padding = 22.dp) {
+            GradientCard(Cue.primaryBrush, Cue.primaryDeep, Modifier.fillMaxWidth(), radius = 32.dp, padding = 22.dp) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         if (nextCall != null) {
                             val mins = ((nextCall.fireAt - t) / 60_000).coerceAtLeast(0)
-                            Txt(if (callLabel.isNotEmpty()) "${callLabel.replaceFirstChar { it.uppercase() }} call in" else nextCall.text, Type.smallStrong, Color(0xFFBFE8E1), maxLines = 1)
+                            Txt(if (callLabel.isNotEmpty()) "${callLabel.replaceFirstChar { it.uppercase() }} call in" else nextCall.text, Type.smallStrong, Color(0xFFF3EEFF), maxLines = 1)
                             Txt(if (mins < 90) "$mins min" else if (mins < 24 * 60) "${mins / 60} h" + (if (mins % 60 >= 5) " ${mins % 60} m" else "") else TextKit.dayLabel(nextCall.fireAt, t, zone), Type.big, Color.White)
                         } else {
-                            Txt("No calls set", Type.smallStrong, Color(0xFFBFE8E1)); Txt("Talk any time", Type.title, Color.White)
+                            Txt("No calls set", Type.smallStrong, Color(0xFFF3EEFF)); Txt("Talk any time", Type.title, Color.White)
                         }
                         Spacer(Modifier.height(14.dp))
-                        Row(Modifier.height(44.dp).shadow(8.dp, CircleShape).clip(CircleShape).background(Brush.verticalGradient(listOf(Color.White, Color(0xFFFFF1EA))))
+                        Row(Modifier.height(44.dp).shadow(8.dp, CircleShape).clip(CircleShape).background(Brush.verticalGradient(listOf(Color.White, Color(0xFFF5F0FF))))
                             .clickable(role = Role.Button) { a.talk() }.padding(start = 14.dp, end = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(8.dp).clip(CircleShape).background(Cue.coral)); Spacer(Modifier.width(8.dp)); Txt("Talk now", Type.bodyStrong, Cue.tealDeep)
+                            Box(Modifier.size(8.dp).clip(CircleShape).background(Cue.coral)); Spacer(Modifier.width(8.dp)); Txt("Talk now", Type.bodyStrong, Cue.primaryDeep)
                         }
                     }
                     DayRing(t, a.cue.settings.morningMinutes, a.cue.settings.nightMinutes, nextCall?.fireAt)
@@ -189,9 +189,21 @@ fun HomeScreen(a: MainActivity, nav: Nav) {
             }
         }
         item {
-            Column(Modifier.padding(horizontal = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) { CueOrb(22.dp); Spacer(Modifier.width(8.dp)); Txt("Cue", Type.smallStrong, Cue.tealDeep) }
-                Txt(nudge, Type.lead)
+            Row(Modifier.padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Pixel(PixelMood.Idle, 84.dp)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Txt("Cue", Type.smallStrong, Cue.primaryDeep)
+                    Txt(nudge, Type.lead)
+                }
+            }
+        }
+        item {
+            Row(Modifier.fillMaxWidth().shadow(10.dp, CircleShape, spotColor = Cue.primaryDeep.copy(alpha = 0.3f)).clip(CircleShape).background(Color.White.copy(alpha = 0.9f))
+                .clickable(role = Role.Button) { nav.go("ask") }.padding(start = 18.dp, end = 8.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.AutoAwesome, null, tint = Cue.primaryDeep, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(10.dp))
+                Txt("Ask Cue by typing", Type.bodyStrong, modifier = Modifier.weight(1f))
+                Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = Cue.muted)
             }
         }
         if (tripList != null && listEntries.isNotEmpty()) item {
@@ -256,13 +268,13 @@ fun DayRing(t: Long, morning: Int, night: Int, next: Long?) {
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Txt(next?.let { TextKit.clock(it, zone) } ?: "—", Type.bodyStrong, Color.White)
-            Txt("next call", Type.tiny, Color(0xFFBFE8E1))
+            Txt("next call", Type.tiny, Color(0xFFF3EEFF))
         }
     }
 }
 
 @Composable
-fun ReminderRow(r: Reminder, t: Long, onClick: () -> Unit) {
+fun ReminderRow(r: Reminder, t: Long, daily: Boolean = false, onClick: () -> Unit) {
     val tint = when (r.kind) {
         ReminderKind.DOSE, ReminderKind.CARE -> AppTints.reminders; ReminderKind.EXPIRY -> AppTints.renewals; ReminderKind.ACCOUNTABILITY -> AppTints.habits
         ReminderKind.LEAVE_BY -> AppTints.albums; ReminderKind.PRACTICE -> AppTints.practice; else -> AppTints.lists
@@ -278,7 +290,8 @@ fun ReminderRow(r: Reminder, t: Long, onClick: () -> Unit) {
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Txt(r.text, Type.bodyStrong, maxLines = 2)
-                Txt("${TextKit.dayLabel(r.fireAt, t, zone).replaceFirstChar { it.uppercase() }}, ${TextKit.clock(r.fireAt, zone)}" + if (r.surface == Surface.RING) " · rings" else "", Type.small, Cue.muted)
+                Txt((if (daily) "Daily at ${TextKit.clock(r.fireAt, zone)}" else "${TextKit.dayLabel(r.fireAt, t, zone).replaceFirstChar { it.uppercase() }}, ${TextKit.clock(r.fireAt, zone)}") +
+                    if (r.surface == Surface.RING) " · rings" else "", Type.small, Cue.muted)
             }
         }
     }
@@ -298,6 +311,8 @@ fun AppsScreen(a: MainActivity, nav: Nav, pins: List<String>) {
     val pending by dao.openPendingFlow().collectAsState(emptyList())
     fun status(key: String): String = when (key) {
         "lists" -> "${entries.count { !it.checked }} open"
+        "notes" -> "${items.count { it.type == ItemType.NOTE && it.kind !in setOf("practice", "renewal") }} kept"
+        "ask" -> "Answers as cards"
         "habits" -> habits.firstOrNull()?.let { "${it.name} streak" } ?: "Start one"
         "journal" -> items.firstOrNull { it.type == ItemType.JOURNAL }?.let { "Last: ${TextKit.dayLabel(it.createdAt, t, zone)}" } ?: "From night calls"
         "albums" -> "${albums.size} album${if (albums.size == 1) "" else "s"}"
@@ -315,7 +330,7 @@ fun AppsScreen(a: MainActivity, nav: Nav, pins: List<String>) {
         if (key in now) now.remove(key) else if (now.size < 3) now += key else { a.cue.engine.surfaces.toast("You can pin three. Unpin one first."); return }
         a.updatePins(now)
     }
-    Page(glowA = Color(0xFFD3F1E8), glowB = Color(0xFFFFE2D2)) {
+    Page(glowA = Cue.glowLavender, glowB = Cue.glowBlush) {
         item { Column { Txt("Apps", Type.display); Txt("I run these for you. Pin up to three.", Type.body, Cue.muted) } }
         item { SectionLabel("Pinned to your bar", "${pins.size} of 3") }
         item {
@@ -331,7 +346,7 @@ fun AppsScreen(a: MainActivity, nav: Nav, pins: List<String>) {
                         Txt(status(app.key), Type.small, Color.White.copy(alpha = 0.85f), maxLines = 1)
                     }
                 }
-                repeat(3 - pins.size) { Box(Modifier.weight(1f).height(112.dp).clip(RoundedCornerShape(26.dp)).border(1.5.dp, Color(0xFFCFC6B8), RoundedCornerShape(26.dp)), contentAlignment = Alignment.Center) { Txt("Free slot", Type.small, Cue.muted) } }
+                repeat(3 - pins.size) { Box(Modifier.weight(1f).height(112.dp).clip(RoundedCornerShape(26.dp)).border(1.5.dp, Color(0xFFCFC8E6), RoundedCornerShape(26.dp)), contentAlignment = Alignment.Center) { Txt("Free slot", Type.small, Cue.muted) } }
             }
         }
         item { SectionLabel("All apps") }
@@ -342,7 +357,7 @@ fun AppsScreen(a: MainActivity, nav: Nav, pins: List<String>) {
                         LiftCard(Modifier.weight(1f).height(106.dp), tint = app.tint.deep, padding = 14.dp, onClick = { nav.go(app.key) }) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 IconChip(app.icon, app.tint, 38.dp, 19.dp)
-                                Icon(Icons.Rounded.PushPin, "Pin ${app.label}", tint = Color(0xFFA7B3B1), modifier = Modifier.size(20.dp).clickable(role = Role.Button) { toggle(app.key) })
+                                Icon(Icons.Rounded.PushPin, "Pin ${app.label}", tint = Color(0xFFADA6C4), modifier = Modifier.size(20.dp).clickable(role = Role.Button) { toggle(app.key) })
                             }
                             Spacer(Modifier.weight(1f))
                             Txt(app.label, Type.bodyStrong)
@@ -361,139 +376,28 @@ fun AppsScreen(a: MainActivity, nav: Nav, pins: List<String>) {
 @Composable
 fun AddField(hint: String, onAdd: (String) -> Unit) {
     var text by remember { mutableStateOf("") }
-    Row(Modifier.fillMaxWidth().shadow(10.dp, CircleShape, spotColor = Cue.tealDeep.copy(alpha = 0.3f)).clip(CircleShape).background(Color.White).padding(start = 18.dp, end = 6.dp),
+    Row(Modifier.fillMaxWidth().shadow(10.dp, CircleShape, spotColor = Cue.primaryDeep.copy(alpha = 0.3f)).clip(CircleShape).background(Color.White).padding(start = 18.dp, end = 6.dp),
         verticalAlignment = Alignment.CenterVertically) {
         BasicTextField(text, { text = it }, Modifier.weight(1f).padding(vertical = 15.dp), textStyle = Type.body.copy(color = Cue.ink), singleLine = true,
-            cursorBrush = SolidColor(Cue.tealDeep), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            cursorBrush = SolidColor(Cue.primaryDeep), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { if (text.isNotBlank()) { onAdd(text.trim()); text = "" } }),
             decorationBox = { inner -> if (text.isEmpty()) Txt(hint, Type.body, Cue.muted); inner() })
-        Box(Modifier.size(42.dp).clip(CircleShape).background(Cue.tealButton).clickable(role = Role.Button, onClickLabel = "Add") { if (text.isNotBlank()) { onAdd(text.trim()); text = "" } },
+        Box(Modifier.size(42.dp).clip(CircleShape).background(Cue.primaryButton).clickable(role = Role.Button, onClickLabel = "Add") { if (text.isNotBlank()) { onAdd(text.trim()); text = "" } },
             contentAlignment = Alignment.Center) { Icon(Icons.Rounded.Add, "Add", tint = Color.White) }
     }
 }
 
-@Composable
-fun ListsScreen(a: MainActivity, nav: Nav) {
-    val dao = a.cue.engine.dao
-    val scope = rememberCoroutineScope()
-    val items by dao.itemsOfTypeFlow(ItemType.CHECKLIST).collectAsState(emptyList())
-    val entries by dao.allEntriesFlow().collectAsState(emptyList())
-    val albums by dao.albumsFlow().collectAsState(emptyList())
-    Page(glowA = Color(0xFFD3F1E8)) {
-        item { BackHeader("Lists", "Add by voice on a call, or type here", { nav.back() }) }
-        item {
-            AddField("Add to today's list") { text ->
-                scope.launch {
-                    val now = System.currentTimeMillis()
-                    val today = items.firstOrNull { it.albumId == null && TextKit.dayKey(it.createdAt, zone) == TextKit.dayKey(now, zone) }
-                    val id = today?.id ?: dao.insertItem(Item(type = ItemType.CHECKLIST, title = "Today", source = "user", createdAt = now))
-                    TextKit.splitList(text).forEachIndexed { i, s -> dao.insertEntry(ChecklistEntry(itemId = id, text = s, position = 100 + i)) }
-                }
-            }
-        }
-        items.forEach { list ->
-            val es = entries.filter { it.itemId == list.id }
-            if (es.isNotEmpty()) item {
-                ChecklistCard(list.title + (list.albumId?.let { id -> albums.firstOrNull { it.id == id }?.let { " · ${it.title.substringBefore(",")}" } } ?: ""), es) { e -> scope.launch { dao.updateEntry(e.copy(checked = !e.checked)) } }
-            }
-        }
-        if (entries.isEmpty()) item { EmptyHint("No lists yet. On tonight's call, just say \"pack charger and passport\".") }
-    }
-}
 
 @Composable
 fun EmptyHint(text: String) {
-    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Color.White.copy(alpha = 0.6f)).border(1.5.dp, Color(0xFFCFC6B8), RoundedCornerShape(24.dp)).padding(20.dp)) {
+    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Color.White.copy(alpha = 0.6f)).border(1.5.dp, Color(0xFFCFC8E6), RoundedCornerShape(24.dp)).padding(20.dp)) {
         Txt(text, Type.body, Cue.muted)
     }
 }
 
-@Composable
-fun HabitsScreen(a: MainActivity, nav: Nav) {
-    val dao = a.cue.engine.dao
-    val scope = rememberCoroutineScope()
-    val habits by dao.habitsFlow().collectAsState(emptyList())
-    val logs by dao.habitLogsFlow().collectAsState(emptyList())
-    val today = java.time.LocalDate.now()
-    Page(glowA = Color(0xFFFFE9B8)) {
-        item { BackHeader("Habits", "I check in by calling you", { nav.back() }, glow = Color(0xFFC98A00)) }
-        item { AddField("New habit, like Walk") { name -> scope.launch { if (dao.habitByName(name) == null) dao.insertHabit(Habit(name = name.replaceFirstChar { it.uppercase() }, createdAt = System.currentTimeMillis())) } } }
-        items(habits) { h ->
-            val done = logs.filter { it.habitId == h.id && it.done }.map { it.day }.toSet()
-            var d = today; if (today.toString() !in done) d = d.minusDays(1); var streak = 0; while (d.toString() in done) { streak++; d = d.minusDays(1) }
-            val doneToday = today.toString() in done
-            Column(Modifier.fillMaxWidth().shadow(12.dp, RoundedCornerShape(26.dp), spotColor = Color(0xFFC98A00)).clip(RoundedCornerShape(26.dp)).background(Cue.marigoldCard).padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconChip(Icons.Rounded.LocalFireDepartment, AppTints.habits)
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) { Txt(h.name, Type.bodyStrong, Color(0xFF4E3800)); Txt("$streak-day streak", Type.small, Color(0xFF4E3800)) }
-                    SoftButton(if (doneToday) "Done today" else "Mark done", color = if (doneToday) Color.White.copy(alpha = 0.5f) else Color.White, textColor = Color(0xFF4E3800), height = 40.dp) {
-                        scope.launch { dao.upsertHabitLog(HabitLog(habitId = h.id, day = today.toString(), done = !doneToday)) }
-                    }
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    (6 downTo 0).forEach { back ->
-                        val day = today.minusDays(back.toLong())
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Box(Modifier.size(30.dp).clip(CircleShape).background(if (day.toString() in done) Color(0xFFC77700) else Color.White.copy(alpha = 0.6f)), contentAlignment = Alignment.Center) {
-                                if (day.toString() in done) Icon(Icons.Rounded.Check, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                            }
-                            Txt(day.dayOfWeek.name.take(1), Type.tiny, Color(0xFF4E3800))
-                        }
-                    }
-                }
-            }
-        }
-        item {
-            LiftCard(Modifier.fillMaxWidth(), tint = Color(0xFFC98A00)) {
-                Txt("Accountability calls", Type.bodyStrong)
-                Txt("Say \"call me at 6 and check if I went to the gym\" and I'll ring you, ask, and keep your streak.", Type.small, Cue.muted)
-            }
-        }
-    }
-}
 
 // ------------------------------------------------------------------ Journal
 
-@Composable
-fun JournalScreen(a: MainActivity, nav: Nav) {
-    val dao = a.cue.engine.dao
-    val t = now()
-    val entries by dao.itemsOfTypeFlow(ItemType.JOURNAL).collectAsState(emptyList())
-    Page(glowA = Color(0xFFFFD9C8)) {
-        item { BackHeader("Your days", "I write these from our night calls", { nav.back() }, glow = Cue.coralDeep) }
-        if (entries.isEmpty()) item { EmptyHint("Your first entry appears after tonight's night check-in.") }
-        entries.forEachIndexed { i, e ->
-            val f = ticketFields(e)
-            val moods = f.optString("mood").split(",").filter { it.isNotBlank() }
-            val day = "${TextKit.dayLabel(e.eventStart ?: e.createdAt, t, zone).replaceFirstChar { it.uppercase() }}"
-            item {
-                if (i == 0) {
-                    GradientCard(Cue.journalBrush, Cue.coralDeep, Modifier.fillMaxWidth(), radius = 28.dp, padding = 18.dp) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Txt(day, Type.smallStrong, Color(0xFFFFF0EA))
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { moods.forEach { Pill(it, Color.White.copy(alpha = 0.22f), Color.White) } }
-                        }
-                        Spacer(Modifier.height(10.dp))
-                        Txt(e.body, Type.lead, Color.White)
-                        val photos = f.optInt("photos", 0)
-                        if (photos > 0) { Spacer(Modifier.height(10.dp)); Txt("Linked to $photos photo${if (photos > 1) "s" else ""} from that day", Type.small, Color(0xFFFFF0EA)) }
-                    }
-                } else {
-                    LiftCard(Modifier.fillMaxWidth(), tint = AppTints.focus.deep) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Txt(day, Type.smallStrong, Cue.muted)
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { moods.forEach { Pill(it, Color(0xFFECE6FB), Color(0xFF5A3FB0)) } }
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        Txt(e.body, Type.body)
-                    }
-                }
-            }
-        }
-    }
-}
 
 // ------------------------------------------------------------------ Albums
 
@@ -503,12 +407,13 @@ fun AlbumsScreen(a: MainActivity, nav: Nav) {
     val albums by dao.albumsFlow().collectAsState(emptyList())
     val items by dao.allItemsFlow().collectAsState(emptyList())
     val t = now()
-    Page(glowA = Color(0xFFDCE2FF), glowB = Color(0xFFFFE2D2)) {
-        item { BackHeader("Albums", "I group what you save, by itself", { nav.back() }, glow = Color(0xFF33408C)) }
-        if (albums.isEmpty()) item { EmptyHint("Save a ticket, a prescription or a bill and I'll start an album.") }
+    Page(glowA = Color(0xFFDCE2FF), glowB = Cue.glowBlush) {
+        item { BackHeader("Spaces", "A page for each thing you're doing", { nav.back() }, glow = Color(0xFF2F3A9E)) }
+        item { NewSpaceCard(a, nav) }
+        if (albums.isEmpty()) item { EmptyHint("Save a ticket, a prescription or a bill and I'll start a space for it too.") }
         albums.firstOrNull { it.kind == AlbumKind.TRIP }?.let { trip ->
             item {
-                GradientCard(Cue.tripBrush, Color(0xFF35419C), Modifier.fillMaxWidth(), onClick = { nav.go("album/${trip.id}") }) {
+                GradientCard(Cue.tripBrush, Color(0xFF3F45B8), Modifier.fillMaxWidth(), onClick = { nav.go("album/${trip.id}") }) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Box(Modifier.size(44.dp).clip(RoundedCornerShape(15.dp)).background(Color.White.copy(alpha = 0.2f)), contentAlignment = Alignment.Center) { Icon(Icons.Rounded.Flight, null, tint = Color.White) }
                         trip.startAt?.let { Pill(TextKit.dayLabel(it, t, zone).replaceFirstChar { c -> c.uppercase() }, Cue.coral, Color(0xFF3A1208)) }
@@ -526,7 +431,7 @@ fun AlbumsScreen(a: MainActivity, nav: Nav) {
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     row.forEach { al ->
-                        val (tint, icon) = when (al.kind) { AlbumKind.HEALTH -> AppTints.reminders to Icons.Rounded.MedicalServices; AlbumKind.ADMIN -> AppTints.papers to Icons.Rounded.Home; AlbumKind.TRIP -> AppTints.albums to Icons.Rounded.Flight; else -> AppTints.renewals to Icons.Rounded.Folder }
+                        val (tint, icon) = kindLook(al.kind)
                         LiftCard(Modifier.weight(1f).height(128.dp), tint = tint.deep, padding = 14.dp, onClick = { nav.go("album/${al.id}") }) {
                             IconChip(icon, tint)
                             Spacer(Modifier.weight(1f))
@@ -560,7 +465,7 @@ fun AlbumScreen(a: MainActivity, nav: Nav, albumId: Long) {
     val t = now()
     val al = album ?: return Page { item { BackHeader("Album", null, { nav.back() }) } }
     Page(glowA = if (al.kind == AlbumKind.HEALTH) Color(0xFFFFD6E2) else Color(0xFFDCE2FF)) {
-        item { BackHeader(al.title.substringBefore(","), (al.startAt?.let { TextKit.dateLabel(it, zone) + " · " } ?: "") + "made by Cue", { nav.back() }, glow = Color(0xFF33408C)) }
+        item { BackHeader(al.title.substringBefore(","), (al.startAt?.let { TextKit.dateLabel(it, zone) + " · " } ?: "") + "made by Cue", { nav.back() }, glow = Color(0xFF2F3A9E)) }
         items.firstOrNull { it.kind == ItemKind.TICKET }?.let { item { TripPass(it) } }
         items.filter { it.type == ItemType.CHECKLIST }.forEach { list ->
             val es = entries.filter { it.itemId == list.id }
@@ -595,17 +500,17 @@ fun AlbumScreen(a: MainActivity, nav: Nav, albumId: Long) {
             items(albumReminders) { r -> ReminderRow(r, t) { nav.go("reminders") } }
         }
         item {
-            Row(Modifier.fillMaxWidth().shadow(10.dp, CircleShape, spotColor = Cue.tealDeep.copy(alpha = 0.3f)).clip(CircleShape).background(Color.White.copy(alpha = 0.85f))
+            Row(Modifier.fillMaxWidth().shadow(10.dp, CircleShape, spotColor = Cue.primaryDeep.copy(alpha = 0.3f)).clip(CircleShape).background(Color.White.copy(alpha = 0.85f))
                 .clickable { a.talk() }.padding(start = 18.dp, end = 8.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Txt("Ask Cue about this ${if (al.kind == AlbumKind.TRIP) "trip" else "album"}", Type.bodyStrong, modifier = Modifier.weight(1f))
-                CueOrb(40.dp)
+                PixelHead(40.dp)
             }
         }
     }
 }
 
 @Composable
-fun DocRow(d: Item, t: Long) {
+fun DocRow(d: Item, t: Long, onClick: (() -> Unit)? = null) {
     val (tint, icon) = when (d.kind) {
         ItemKind.PRESCRIPTION -> AppTints.reminders to Icons.Rounded.Medication; ItemKind.LAB_REPORT -> AppTints.reminders to Icons.Rounded.Science
         ItemKind.INSURANCE, ItemKind.VEHICLE -> AppTints.renewals to Icons.Rounded.Shield; ItemKind.BILL -> AppTints.papers to Icons.Rounded.Receipt
@@ -616,7 +521,7 @@ fun DocRow(d: Item, t: Long) {
     val sub = listOfNotNull(f.optString("doctor").takeIf { it.isNotBlank() }?.let { "Dr. $it" }, f.optString("amount").takeIf { it.isNotBlank() }?.let { "₹$it" },
         f.optString("warranty").takeIf { it.isNotBlank() }?.let { "$it warranty" }, d.expiresAt?.let { "until ${TextKit.dateLabel(it, zone)}" },
         "saved ${TextKit.dayLabel(d.createdAt, t, zone)}").joinToString(" · ")
-    LiftCard(Modifier.fillMaxWidth(), tint = tint.deep, padding = 14.dp) {
+    LiftCard(Modifier.fillMaxWidth(), tint = tint.deep, padding = 14.dp, onClick = onClick) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconChip(icon, tint, 38.dp, 19.dp); Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) { Txt(d.title, Type.bodyStrong, maxLines = 1); Txt(sub, Type.small, Cue.muted, maxLines = 2) }
@@ -626,77 +531,9 @@ fun DocRow(d: Item, t: Long) {
 
 // ------------------------------------------------------------------ Reminders, Papers, Renewals, People
 
-@Composable
-fun RemindersScreen(a: MainActivity, nav: Nav) {
-    val dao = a.cue.engine.dao
-    val t = now()
-    val reminders by dao.scheduledRemindersFlow().collectAsState(emptyList())
-    val shown = reminders.filter { it.kind !in setOf(ReminderKind.PRELOAD, ReminderKind.AIRPORT_BACKUP) }.sortedBy { it.fireAt }
-    Page(glowA = Color(0xFFFFD6E2)) {
-        item { BackHeader("Reminders", "Calls and nudges I have planned", { nav.back() }, glow = AppTints.reminders.deep) }
-        if (shown.isEmpty()) item { EmptyHint("Nothing planned. Say \"remind me at 7 to call Mom\" on any call.") }
-        shown.groupBy { TextKit.dayLabel(it.fireAt, t, zone) }.forEach { (day, rs) ->
-            item { SectionLabel(day.replaceFirstChar { it.uppercase() }) }
-            items(rs) { r -> ReminderRow(r, t) {} }
-        }
-    }
-}
 
-@Composable
-fun PapersScreen(a: MainActivity, nav: Nav) {
-    val dao = a.cue.engine.dao
-    val t = now()
-    val items by dao.itemsOfTypeFlow(ItemType.GALLERY).collectAsState(emptyList())
-    Page(glowA = Color(0xFFF1E3C8)) {
-        item { BackHeader("Papers", "Tickets, bills, reports and IDs you saved", { nav.back() }, glow = AppTints.papers.deep) }
-        if (items.isEmpty()) item { EmptyHint("Take a screenshot or share a PDF to Cue and it lands here, filed.") }
-        items(items) { DocRow(it, t) }
-    }
-}
 
-@Composable
-fun RenewalsScreen(a: MainActivity, nav: Nav) {
-    val dao = a.cue.engine.dao
-    val t = now()
-    val items by dao.expiringFlow().collectAsState(emptyList())
-    Page(glowA = Color(0xFFD3F1E8)) {
-        item { BackHeader("Renewals", "Warranties, insurance and vehicle papers", { nav.back() }, glow = AppTints.renewals.deep) }
-        if (items.isEmpty()) item { EmptyHint("Photograph a bill with a warranty and I'll ring you before it ends.") }
-        items(items) { d ->
-            val days = ((d.expiresAt!! - t) / 86_400_000L)
-            LiftCard(Modifier.fillMaxWidth(), tint = AppTints.renewals.deep) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconChip(Icons.Rounded.Autorenew, AppTints.renewals); Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) { Txt(d.title.removeSuffix(" bill") + if (d.kind == ItemKind.BILL) " warranty" else "", Type.bodyStrong); Txt("Ends ${TextKit.dateLabel(d.expiresAt!!, zone)}", Type.small, Cue.muted) }
-                    Pill(if (days < 0) "Ended" else "$days days", if (days < 30) Cue.coralTint else Color(0xFFDDF3EA), if (days < 30) Cue.coralText else Color(0xFF21694F))
-                }
-            }
-        }
-    }
-}
 
-@Composable
-fun PeopleScreen(a: MainActivity, nav: Nav) {
-    val dao = a.cue.engine.dao
-    val scope = rememberCoroutineScope()
-    val people by dao.peopleFlow().collectAsState(emptyList())
-    val pending by dao.openPendingFlow().collectAsState(emptyList())
-    Page(glowA = Color(0xFFC6E6F5)) {
-        item { BackHeader("People", "What's waiting on you, by person", { nav.back() }, glow = AppTints.people.deep) }
-        val withItems = people.filter { p -> pending.any { it.personId == p.id } }
-        if (withItems.isEmpty()) item { EmptyHint("When someone asks you for something in a message, I'll remember it here and remind you when they write again.") }
-        items(withItems) { p ->
-            LiftCard(Modifier.fillMaxWidth(), tint = AppTints.people.deep) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(40.dp).clip(CircleShape).background(Brush.linearGradient(listOf(AppTints.people.light, AppTints.people.deep))), contentAlignment = Alignment.Center) { Txt(p.name.take(1), Type.bodyStrong, Color.White) }
-                    Spacer(Modifier.width(12.dp)); Txt(p.name, Type.bodyStrong)
-                }
-                Spacer(Modifier.height(6.dp))
-                pending.filter { it.personId == p.id }.forEach { item -> CheckRow(item.text, false, onToggle = { scope.launch { dao.updatePending(item.copy(status = "DONE")) } }) }
-            }
-        }
-    }
-}
 
 // ------------------------------------------------------------------ Practice, Focus, Search
 
@@ -728,36 +565,6 @@ fun PracticeScreen(a: MainActivity, nav: Nav) {
     }
 }
 
-@Composable
-fun FocusScreen(a: MainActivity, nav: Nav) {
-    // The session is saved (a quiet reminder), so one started by voice on a call shows here too, and the other way round.
-    val engine = a.cue.engine
-    val scope = rememberCoroutineScope()
-    val reminders by engine.dao.scheduledRemindersFlow().collectAsState(emptyList())
-    val session = reminders.firstOrNull { it.kind == com.cue.domain.ReminderKind.FOCUS && it.fireAt > System.currentTimeMillis() }
-    var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(session?.id) { while (session != null) { now = System.currentTimeMillis(); delay(1000) } }
-    val left = if (session != null) ((session.fireAt - now) / 1000).coerceAtLeast(0) else 25 * 60L
-    val what = session?.let { org.json.JSONObject(it.meta).optString("what", "Focus") }
-    fun run(tool: String) = scope.launch {
-        com.cue.agent.CueToolExecutor(engine, com.cue.agent.CallContext(null, "TALK", null, null))
-            .execute(com.cue.brain.ToolCall(tool, if (tool == "focus_start") mapOf("minutes" to "25") else emptyMap()))
-    }
-    Page(glowA = Color(0xFFE4DCF7)) {
-        item { BackHeader("Focus", "Or say \"focus for 40 minutes on the deck\" on a call", { nav.back() }, glow = AppTints.focus.deep) }
-        item {
-            GradientCard(Brush.linearGradient(listOf(AppTints.focus.light, AppTints.focus.deep, Color(0xFF4A2FA0))), AppTints.focus.deep, Modifier.fillMaxWidth()) {
-                Txt("%d:%02d".format(left / 60, left % 60), Type.big.copy(fontSize = sp(72f), lineHeight = sp(76f)), Color.White)
-                Txt(if (session != null) "Stay with it · $what" else "Ready when you are", Type.body, Color.White.copy(alpha = 0.85f))
-                Spacer(Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    PrimaryButton(if (session != null) "Stop" else "Start 25 min", Modifier.weight(1f), brush = Brush.verticalGradient(listOf(Color.White, Color(0xFFF1ECFF))),
-                        shadow = AppTints.focus.deep, textColor = AppTints.focus.text) { run(if (session != null) "focus_stop" else "focus_start") }
-                }
-            }
-        }
-    }
-}
 
 @Composable
 fun SearchScreen(a: MainActivity, nav: Nav) {
@@ -768,17 +575,17 @@ fun SearchScreen(a: MainActivity, nav: Nav) {
     var searched by remember { mutableStateOf(false) }
     val t = now()
     fun run(q: String) { query = q; scope.launch { results = engine.search(q); searched = true } }
-    Page(glowA = Color(0xFFD3F1E8), glowB = Color(0xFFDCE2FF)) {
+    Page(glowA = Cue.glowLavender, glowB = Cue.glowBlush) {
         item { BackHeader("Find anything", null, { nav.back() }) }
         item {
-            Row(Modifier.fillMaxWidth().shadow(14.dp, CircleShape, spotColor = Cue.tealDeep.copy(alpha = 0.45f)).clip(CircleShape).background(Color.White).border(2.dp, Cue.teal, CircleShape)
+            Row(Modifier.fillMaxWidth().shadow(14.dp, CircleShape, spotColor = Cue.primaryDeep.copy(alpha = 0.45f)).clip(CircleShape).background(Color.White).border(2.dp, Cue.primary, CircleShape)
                 .padding(start = 18.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Search, null, tint = Cue.tealDeep); Spacer(Modifier.width(10.dp))
+                Icon(Icons.Rounded.Search, null, tint = Cue.primaryDeep); Spacer(Modifier.width(10.dp))
                 BasicTextField(query, { query = it }, Modifier.weight(1f).padding(vertical = 17.dp), textStyle = Type.bodyStrong.copy(color = Cue.ink), singleLine = true,
-                    cursorBrush = SolidColor(Cue.tealDeep), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    cursorBrush = SolidColor(Cue.primaryDeep), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { run(query) }),
                     decorationBox = { inner -> if (query.isEmpty()) Txt("café last week, AC bill…", Type.body, Cue.muted); inner() })
-                Box(Modifier.size(42.dp).clip(CircleShape).background(Brush.radialGradient(listOf(Cue.tealLight, Cue.tealDeep))).clickable(role = Role.Button, onClickLabel = "Ask by voice") { a.talk() },
+                Box(Modifier.size(42.dp).clip(CircleShape).background(Cue.ribbonBrush).clickable(role = Role.Button, onClickLabel = "Ask by voice") { a.talk() },
                     contentAlignment = Alignment.Center) { Icon(Icons.Rounded.Mic, "Ask by voice", tint = Color.White, modifier = Modifier.size(18.dp)) }
             }
         }

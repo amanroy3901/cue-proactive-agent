@@ -73,12 +73,7 @@ class CueEngine(
     }
 
     override suspend fun streak(habitId: Long): Int {
-        val logs = dao.habitLogs(habitId).associateBy { it.day }
-        var day = TextKit.local(clock.now(), clock.zone).toLocalDate()
-        if (logs[day.toString()]?.done != true) day = day.minusDays(1)
-        var n = 0
-        while (logs[day.toString()]?.done == true) { n++; day = day.minusDays(1) }
-        return n
+        return HabitDays.streak(dao.habit(habitId), dao.habitLogs(habitId), TextKit.local(clock.now(), clock.zone).toLocalDate(), clock.zone)
     }
 
     override suspend fun person(name: String): Person {
@@ -236,13 +231,29 @@ class CueEngine(
     suspend fun onGeofence(placeId: Long) = mutex.withLock {
         val place = dao.place(placeId) ?: return@withLock
         val ev = record(TriggerKind.GEOFENCE_ENTER, placeId, "geo:$placeId:${clock.now() / 3_600_000}") ?: return@withLock
-        val spec = bubbleForPlace(place)
+        val spec = withRules(bubbleForPlace(place), StandingRules(this).fire(com.cue.domain.RuleTrigger.ARRIVE, place.label, place.kind), place.label, "You're at ${place.label}")
         showBubble(ev, spec, place.label)
         if (place.kind == PlaceKind.AIRPORT) {
             dao.scheduledReminders().filter { it.kind == ReminderKind.AIRPORT_BACKUP }.forEach {
                 dao.updateReminder(it.copy(status = ReminderStatus.DONE)); scheduler.cancel(it.id)
             }
         }
+    }
+
+    /** Left a saved place: only "when I leave" rules act on it. */
+    suspend fun onGeofenceExit(placeId: Long) = mutex.withLock {
+        val place = dao.place(placeId) ?: return@withLock
+        val rules = StandingRules(this).fire(com.cue.domain.RuleTrigger.LEAVE, place.label, place.kind)
+        if (rules.isEmpty()) return@withLock
+        val ev = record(TriggerKind.GEOFENCE_ENTER, placeId, "geo-exit:$placeId:${clock.now() / 3_600_000}", JSONObject().put("exit", true).toString()) ?: return@withLock
+        showBubble(ev, withRules(null, rules, place.label, "Leaving ${place.label}"), "leave:${place.label}")
+    }
+
+    /** Adds what standing rules asked to be said here to a bubble, making one if there was nothing else to show. */
+    private fun withRules(spec: BubbleSpec?, rules: List<com.cue.domain.StandingRule>, label: String, headline: String): BubbleSpec? {
+        if (rules.isEmpty()) return spec
+        val items = rules.map { BubbleItem(it.id, it.text, "rule") }
+        return spec?.copy(items = items + spec.items) ?: BubbleSpec(label, headline, null, items)
     }
 
     private suspend fun showBubble(ev: TriggerEvent, spec: BubbleSpec?, label: String) {
@@ -323,13 +334,15 @@ class CueEngine(
             }
         }
         val open = dao.openPending(p.id)
-        val spec = if (open.isEmpty()) null else BubbleSpec(app.substringAfterLast('.').replaceFirstChar { it.uppercase() },
-            "${p.name} messaged. Still open with ${p.name}", null, open.take(4).map { BubbleItem(it.id, it.text, "pending") }, personId = p.id)
+        val rules = StandingRules(this).fire(com.cue.domain.RuleTrigger.MESSAGE, p.name, sender)
+        val items = rules.map { BubbleItem(it.id, it.text, "rule") } + open.take(4).map { BubbleItem(it.id, it.text, "pending") }
+        val spec = if (items.isEmpty()) null else BubbleSpec(app.substringAfterLast('.').replaceFirstChar { it.uppercase() },
+            if (open.isEmpty()) "${p.name} messaged. You asked me to remind you" else "${p.name} messaged. Still open with ${p.name}", null, items.take(4), personId = p.id)
         showBubble(ev, spec, "person:${p.id}")
     }
 
     /** Phase one of ingest: read fields with plain code, file into an album, plan triggers. Returns the item. */
-    suspend fun ingestDocument(text: String, mediaPath: String?, source: String, hash: String?, fileName: String = ""): Item? = mutex.withLock {
+    suspend fun ingestDocument(text: String, mediaPath: String?, source: String, hash: String?, fileName: String = "", intoAlbum: Long? = null): Item? = mutex.withLock {
         if (hash != null) dao.itemByHash(hash)?.let { log("duplicate $source ignored"); return@withLock null }
         val now = clock.now()
         val ex = FastFields.extract(text, now, clock.zone, fileName)
@@ -349,7 +362,7 @@ class CueEngine(
         }
         var item = Item(type = ItemType.GALLERY, kind = ex.kind, title = ex.title, body = text.take(4000), fields = JSONObject(ex.fields as Map<*, *>).toString(),
             eventStart = ex.eventStart, expiresAt = ex.expiresAt, mediaPath = mediaPath, source = source, contentHash = hash, personLabel = ex.personLabel, createdAt = now)
-        val albumId = assigner.assign(item, ex)
+        val albumId = intoAlbum?.takeIf { dao.album(it) != null } ?: assigner.assign(item, ex)
         item = item.copy(albumId = albumId)
         val id = dao.insertItem(item)
         item = item.copy(id = id)

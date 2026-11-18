@@ -104,7 +104,7 @@ object RingController {
             .setContentIntent(full)
             .setOngoing(true)
             .setTimeoutAfter(RING_MS)
-            .setColor(0xFF0D4B48.toInt())
+            .setColor(0xFF4B2FB5.toInt())
             .setStyle(Notification.CallStyle.forIncomingCall(caller, decline, answer))
             .build()
         n.flags = n.flags or Notification.FLAG_INSISTENT
@@ -148,7 +148,7 @@ class CallService : Service() {
         if (nm.getNotificationChannel(ch) == null) nm.createNotificationChannel(NotificationChannel(ch, "Cue call in progress", NotificationManager.IMPORTANCE_LOW))
         val open = PendingIntent.getActivity(this, 1, Intent(this, CallActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
         val n = Notification.Builder(this, ch).setSmallIcon(android.R.drawable.sym_action_call).setContentTitle("Cue call in progress")
-            .setContentIntent(open).setOngoing(true).setColor(0xFF0D4B48.toInt()).build()
+            .setContentIntent(open).setOngoing(true).setColor(0xFF4B2FB5.toInt()).build()
         val hasMic = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         runCatching {
             ServiceCompat.startForeground(this, 77, n, if (hasMic) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0)
