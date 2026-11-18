@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Alarm
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.Autorenew
 import androidx.compose.material.icons.rounded.Book
 import androidx.compose.material.icons.rounded.Checklist
@@ -47,10 +49,12 @@ data class AppDef(val key: String, val label: String, val icon: ImageVector, val
 
 object AppCatalog {
     val all = listOf(
+        AppDef("ask", "Ask Cue", Icons.Rounded.AutoAwesome, AppTints.focus),
         AppDef("lists", "Lists", Icons.Rounded.Checklist, AppTints.lists),
+        AppDef("notes", "Notes", Icons.Rounded.EditNote, AppTints.habits),
         AppDef("habits", "Habits", Icons.Rounded.LocalFireDepartment, AppTints.habits),
         AppDef("journal", "Journal", Icons.Rounded.Book, AppTints.journal),
-        AppDef("albums", "Albums", Icons.Rounded.PhotoLibrary, AppTints.albums),
+        AppDef("albums", "Spaces", Icons.Rounded.PhotoLibrary, AppTints.albums),
         AppDef("reminders", "Reminders", Icons.Rounded.Alarm, AppTints.reminders),
         AppDef("papers", "Papers", Icons.Rounded.Description, AppTints.papers),
         AppDef("renewals", "Renewals", Icons.Rounded.Autorenew, AppTints.renewals),
@@ -107,6 +111,12 @@ class MainActivity : ComponentActivity() {
             .putExtra(RingController.EXTRA_TITLE, if (kind == "PRACTICE") "English practice" else "Talk to Cue").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
+    /** Ask Cue's conversation and its generated screens; lives as long as the activity. */
+    val askSession by lazy { AskSession(this) }
+
+    /** Opens one of Cue's screens by route ("lists", "album/12"); generated screens use it. */
+    fun openRoute(route: String) { if (route.isNotBlank()) nav.go(route) }
+
     fun updatePins(list: List<String>) { cue.settings.pinnedApps = list; pins = cue.settings.pinnedApps }
 
     @Composable
@@ -118,7 +128,7 @@ class MainActivity : ComponentActivity() {
         BackHandler(enabled = nav.stack.size > 1) { nav.back() }
         Box(Modifier.fillMaxSize()) {
             Route(nav.current)
-            val showBar = nav.current.substringBefore('/') !in setOf("settings", "debug")
+            val showBar = nav.current.substringBefore('/') !in setOf("settings", "debug", "knows", "ask")
             if (showBar) {
                 val entries = listOf(NavEntry("home", "Home", Icons.Rounded.Home)) + pins.mapNotNull { AppCatalog.get(it) }.map { NavEntry(it.key, it.label, it.icon) } +
                     NavEntry("apps", "Apps", Icons.Rounded.GridView)
@@ -144,10 +154,12 @@ class MainActivity : ComponentActivity() {
             "home" -> HomeScreen(this, nav)
             "apps" -> AppsScreen(this, nav, pins)
             "lists" -> ListsScreen(this, nav)
+            "notes" -> NotesScreen(this, nav)
+            "ask" -> AskScreen(this, nav)
             "habits" -> HabitsScreen(this, nav)
             "journal" -> JournalScreen(this, nav)
             "albums" -> AlbumsScreen(this, nav)
-            "album" -> AlbumScreen(this, nav, arg ?: 0)
+            "album" -> SpaceScreen(this, nav, arg ?: 0)
             "reminders" -> RemindersScreen(this, nav)
             "papers" -> PapersScreen(this, nav)
             "renewals" -> RenewalsScreen(this, nav)
@@ -156,6 +168,7 @@ class MainActivity : ComponentActivity() {
             "focus" -> FocusScreen(this, nav)
             "search" -> SearchScreen(this, nav)
             "settings" -> SettingsScreen(this, nav)
+            "knows" -> KnowsScreen(this, nav)
             "debug" -> DebugScreen(this, nav)
             else -> HomeScreen(this, nav)
         }

@@ -14,8 +14,12 @@ mlkitText = "16.0.1"
 litert = "2.3.0"
 junit = "4.13.2"
 okhttp = "4.12.0"
+a2ui = "1.0.0-alpha02"
 
 [libraries]
+a2ui-compose-runtime = { module = "androidx.a2ui.compose:compose-runtime", version.ref = "a2ui" }
+a2ui-compose-ui = { module = "androidx.a2ui.compose:compose-ui", version.ref = "a2ui" }
+material3-a2ui = { module = "androidx.compose.material3:material3-a2ui", version.ref = "a2ui" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }

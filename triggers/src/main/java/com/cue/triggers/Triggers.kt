@@ -80,7 +80,7 @@ class AndroidScheduler(private val context: Context) : TriggerScheduler {
             .setRequestId("place:${place.id}")
             .setCircularRegion(place.lat, place.lng, place.radiusM.coerceAtLeast(100f))
             .setExpirationDuration(Geofence.NEVER_EXPIRE)
-            .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER)
+            .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER or Geofence.GEOFENCE_TRANSITION_EXIT)
             .setLoiteringDelay(30_000)
             .build()
         val req = GeofencingRequest.Builder().setInitialTrigger(0).addGeofence(fence).build()
@@ -121,9 +121,12 @@ class AlarmReceiver : BroadcastReceiver() {
 class GeofenceReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val event = GeofencingEvent.fromIntent(intent) ?: return
-        if (event.hasError() || event.geofenceTransition != Geofence.GEOFENCE_TRANSITION_ENTER) return
+        if (event.hasError()) return
         val ids = event.triggeringGeofences.orEmpty().mapNotNull { it.requestId.removePrefix("place:").toLongOrNull() }
-        async { ids.forEach { CueRuntime.engine.onGeofence(it) } }
+        when (event.geofenceTransition) {
+            Geofence.GEOFENCE_TRANSITION_ENTER -> async { ids.forEach { CueRuntime.engine.onGeofence(it) } }
+            Geofence.GEOFENCE_TRANSITION_EXIT -> async { ids.forEach { CueRuntime.engine.onGeofenceExit(it) } }
+        }
     }
 }
 

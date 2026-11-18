@@ -130,6 +130,15 @@ fun summaryLabel(tool: String): Pair<String, Pair<Color, Color>> = when (tool) {
     "journal_write" -> "Today's journal written" to AppTints.journal.pair()
     "renewal_remind" -> "Renewal reminder set" to AppTints.renewals.pair()
     "practice_note" -> "Practice notes" to AppTints.practice.pair()
+    "medicine_stop" -> "Medicine reminders stopped" to AppTints.reminders.pair()
+    "measure_log" -> "Reading saved" to AppTints.renewals.pair()
+    "measure_schedule" -> "Reading reminders set" to AppTints.renewals.pair()
+    "remember" -> "Cue will remember" to AppTints.albums.pair()
+    "profile_forget" -> "Forgotten" to AppTints.albums.pair()
+    "follow_up" -> "I'll check back" to AppTints.reminders.pair()
+    "rule_add", "rule_remove" -> "When-this-happens rule" to AppTints.focus.pair()
+    "promise_check" -> "Needs a time" to AppTints.reminders.pair()
+    "learned" -> "Picked up about you" to AppTints.albums.pair()
     else -> "Nothing new to file" to (Color(0xFFADA6C4) to Cue.muted)
 }
 enum class Live { SPEAKING, LISTENING, THINKING, IDLE }
@@ -158,6 +167,8 @@ class CallActivity : ComponentActivity() {
     private var action by mutableStateOf<PixelMood?>(null)
     private var actionStamp by mutableStateOf(0L)
     private val changes = mutableStateListOf<String>()
+    /** Facts Cue picked up on this call, waiting for Keep or Remove. */
+    private val learned = mutableStateListOf<com.cue.domain.ProfileFact>()
 
     private var kind = "TALK"
     private var reminderId: Long? = null
@@ -512,7 +523,8 @@ class CallActivity : ComponentActivity() {
         val app = applicationContext
         CueRuntime.scope.launch {
             val c = f?.end().orEmpty()
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { changes.clear(); changes += c }
+            val got = f?.learned.orEmpty()
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { changes.clear(); changes += c.filterNot { it.startsWith("learned:") }; learned.clear(); learned += got }
             CallService.stop(app)
         }
     }
@@ -708,6 +720,26 @@ class CallActivity : ComponentActivity() {
         }
     }
 
+    /** "What Cue learned": facts picked up on the call. Nothing is kept until the user says so. */
+    @Composable
+    private fun LearnedCard(facts: List<com.cue.domain.ProfileFact>, dark: Boolean, fg: Color, keep: (com.cue.domain.ProfileFact) -> Unit, remove: (com.cue.domain.ProfileFact) -> Unit) {
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(if (dark) Color.White.copy(alpha = 0.10f) else Cue.primaryTint).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Txt("What Cue learned", Type.bodyStrong, fg)
+            Txt("Keep these so I know them on every call?", Type.small, if (dark) Cue.nightMuted else Cue.muted)
+            facts.forEach { f ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Txt(f.text, Type.body, fg, modifier = Modifier.weight(1f), maxLines = 2)
+                    Spacer(Modifier.width(8.dp))
+                    Txt("Remove", Type.small, if (dark) Cue.nightMuted else Cue.muted, modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable { remove(f) }.padding(8.dp))
+                    Txt("Keep", Type.bodyStrong, if (dark) Color.White else Cue.primaryDeep, modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable { keep(f) }.padding(8.dp))
+                }
+            }
+        }
+    }
+
     @Composable
     private fun Ended() {
         val dark = night || kind == ReminderKind.CHECKIN_NIGHT
@@ -724,6 +756,11 @@ class CallActivity : ComponentActivity() {
             Txt("From this ${seconds / 60}:${"%02d".format(seconds % 60)} call", Type.body, if (dark) Cue.nightMuted else Cue.muted)
             val shown = changes.ifEmpty { listOf("none: Nothing new this time") }
             androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (learned.isNotEmpty()) item {
+                    LearnedCard(learned.toList(), dark, fg,
+                        keep = { fact -> CueRuntime.scope.launch { CueRuntime.engine.dao.updateFact(fact.copy(confirmed = true)) }; learned.remove(fact) },
+                        remove = { fact -> CueRuntime.scope.launch { CueRuntime.engine.dao.deleteFact(fact.id) }; learned.remove(fact) })
+                }
                 items(shown) { c ->
                     val (label, tint) = summaryLabel(c.substringBefore(":"))
                     Row(

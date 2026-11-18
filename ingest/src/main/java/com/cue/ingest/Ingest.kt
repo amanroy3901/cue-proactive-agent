@@ -33,7 +33,7 @@ private const val TAG = "CueIngest"
  * plain text as is), hash the file to drop duplicates, then hand it to the engine to extract fields and file it.
  */
 object Ingest {
-    suspend fun process(context: Context, path: String, source: String, fileName: String) {
+    suspend fun process(context: Context, path: String, source: String, fileName: String, albumId: Long? = null) {
         val file = File(path)
         if (!file.exists()) return
         val hash = sha(file)
@@ -44,7 +44,7 @@ object Ingest {
             else -> ocr(context, Uri.fromFile(file))
         }
         Log.i(TAG, "ingest $source $fileName -> ${text.length} chars")
-        CueRuntime.engine.ingestDocument(text, path, source, hash, fileName)
+        CueRuntime.engine.ingestDocument(text, path, source, hash, fileName, albumId)
     }
 
     private fun sha(f: File): String {
@@ -85,9 +85,10 @@ object Ingest {
         return out.toString()
     }
 
-    fun enqueue(context: Context, path: String, source: String, fileName: String) {
+    /** [albumId]: file it into this space instead of letting Cue pick the album. */
+    fun enqueue(context: Context, path: String, source: String, fileName: String, albumId: Long? = null) {
         WorkManager.getInstance(context).enqueue(
-            OneTimeWorkRequestBuilder<IngestWorker>().setInputData(workDataOf("path" to path, "source" to source, "name" to fileName)).build())
+            OneTimeWorkRequestBuilder<IngestWorker>().setInputData(workDataOf("path" to path, "source" to source, "name" to fileName, "albumId" to (albumId ?: -1L))).build())
     }
 
     fun copy(context: Context, uri: Uri): Pair<String, String>? = runCatching {
@@ -106,7 +107,7 @@ class IngestWorker(context: Context, params: WorkerParameters) : CoroutineWorker
     override suspend fun doWork(): Result {
         val path = inputData.getString("path") ?: return Result.failure()
         if (!CueRuntime.ready) return Result.retry()
-        Ingest.process(applicationContext, path, inputData.getString("source") ?: "share", inputData.getString("name") ?: "")
+        Ingest.process(applicationContext, path, inputData.getString("source") ?: "share", inputData.getString("name") ?: "", inputData.getLong("albumId", -1L).takeIf { it > 0 })
         return Result.success()
     }
 }

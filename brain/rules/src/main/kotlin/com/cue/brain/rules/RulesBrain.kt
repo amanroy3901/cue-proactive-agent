@@ -192,6 +192,10 @@ object Intents {
         }
         Regex("^(?:tick|check)\\s+(?:off\\s+)?(?:the\\s+)?(.+)").find(l)?.let { m -> return listOf(call("checklist_tick", "entry" to m.groupValues[1])) }
         Regex("^(?:the\\s+|my\\s+)?(.+?)\\s+(?:is|are)\\s+(?:packed|done)$").find(l)?.let { m -> return listOf(call("checklist_tick", "entry" to m.groupValues[1])) }
+        // Money spent: "I spent 1200 on dinner", "paid 500 for the cab", "add 300 for snacks, Riya paid".
+        Regex("\\b(?:spent|paid|add(?:ed)?|log)\\s+(?:rs\\.?\\s*|₹\\s*|inr\\s*)?(\\d[\\d,]*(?:\\.\\d+)?\\s*k?)\\s*(?:rupees|rs|bucks)?\\s+(?:on|for)\\s+(.+?)(?:[,.]?\\s*(\\w+) paid)?[.!]*$").find(l)?.let { m ->
+            return listOf(call("expense_add", "amount" to m.groupValues[1], "what" to m.groupValues[2].removePrefix("the ").removePrefix("a "), "paid_by" to m.groupValues[3]))
+        }
         // Habits said in passing.
         Regex("i\\s+(?:went to|did)\\s+(?:the\\s+)?(gym|yoga|run|walk|workout)").find(l)?.let { m ->
             return listOf(call("habit_checkin", "habit" to m.groupValues[1], "done" to "yes"))
@@ -204,6 +208,14 @@ object Intents {
         Regex("^(?:well,?\\s+|ok(?:ay)?,?\\s+|so\\s+)?(?:can you\\s+|could you\\s+|please\\s+|i want you to\\s+|i'?d like you to\\s+)?(?:please\\s+)?(?:add|put)\\s+(.+?)(?:\\s+(?:to|in|into|on)\\s+(?:my|the)\\s+(?:\\w+\\s+)?(?:list|checklist))?[.?!]*$")
             .find(l)?.takeIf { !Regex("^(?:a\\s+)?(?:reminder|note)\\b").containsMatchIn(it.groupValues[1]) }
             ?.let { m -> return listOf(call("checklist_add", "entries" to m.groupValues[1])) }
+        // Health readings: "my bp is 130 over 85", "sugar was 110 fasting".
+        Regex("\\b(bp|blood pressure|sugar|glucose|weight|pulse)\\b.*?\\b(?:is|was|came|reading)\\b\\D{0,12}(\\d{2,3}(?:\\s*(?:/|over|by)\\s*\\d{2,3})?)(.*)").find(l)?.let { m ->
+            return listOf(call("measure_log", "kind" to m.groupValues[1], "value" to m.groupValues[2], "context" to m.groupValues[3].trim()))
+        }
+        // Facts about the user go to the profile: "remember that I have lunch at 1".
+        Regex("^(?:remember|note|keep in mind)\\s+(?:that\\s+)?((?:i|i'm|i am|my)\\b.+)", RegexOption.IGNORE_CASE).find(c)?.let { m ->
+            return listOf(call("remember", "fact" to m.groupValues[1], "topic" to ""))
+        }
         // Notes.
         Regex("^(?:remember|note|keep in mind|save)\\s+(?:that\\s+)?(.+)").find(c)?.let { m -> return listOf(call("note_save", "text" to m.groupValues[1])) }
         Regex("^(?:the\\s+)?(hotel|address|meeting|pnr|booking|wifi|room)\\b.+").find(l)?.let { return listOf(call("note_save", "text" to c)) }
@@ -212,7 +224,8 @@ object Intents {
 
     fun replyFor(results: List<ToolResult>, mode: String): String {
         val parts = results.map { r ->
-            if (!r.ok) r.message.replaceFirstChar { it.uppercase() } + "."
+            if (!r.ok && r.message.contains("ASK: ")) r.message.substringAfter("ASK: ").substringBefore(" Call ").trim()
+            else if (!r.ok) r.message.replaceFirstChar { it.uppercase() } + "."
             else when (r.name) {
                 "checklist_add" -> "Added " + r.message.removePrefix("added ").lowercase(Locale.ROOT).split(", ").let { l -> if (l.size > 1) l.dropLast(1).joinToString(", ") + " and " + l.last() else l.first() } + "."
                 "habit_add" -> r.message.replaceFirstChar { it.uppercase() } + "."
@@ -222,7 +235,10 @@ object Intents {
                 "reminder_set" -> r.message.replaceFirstChar { it.uppercase() } + "."
                 "checkin_time" -> "Done. " + r.message.replaceFirstChar { it.uppercase() } + "."
                 "event_move" -> "Done, I've " + r.message + "."
-                "dose_schedule" -> "Okay: " + r.message + ". If you miss one, I'll call you."
+                "dose_schedule" -> "Okay: " + r.message.substringBefore(". FOLLOW-UP").substringBefore(". IMPACT") + ". If you miss one, I'll call you."
+                "measure_log" -> "Saved: " + r.message.substringAfter("saved ").substringBefore(" FOLLOW-UP").replace(Regex("(URGENT: )?(This is|this is)"), "This is").substringBefore(" Say so").substringBefore(" Mention").substringBefore(" Ask") 
+                "remember" -> "Got it, I'll remember that."
+                "expense_add" -> "Logged. " + r.message.substringAfter("; ").substringBefore(". IMPACT").replaceFirstChar { it.uppercase() } + "."
                 "dose_taken" -> if (r.message.contains("taken")) "Great, marked as taken. Talk soon." else "Okay, noted. Please take it when you can."
                 "habit_checkin" -> if (r.message.contains("streak is")) "Nice! " + r.message.replaceFirstChar { it.uppercase() } + "." else "No worries, tomorrow's a new day."
                 "pending_add" -> "Got it, " + r.message + "."

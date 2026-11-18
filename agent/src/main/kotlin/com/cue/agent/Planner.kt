@@ -8,6 +8,7 @@ import com.cue.domain.Item
 import com.cue.domain.ItemKind
 import com.cue.domain.Place
 import com.cue.domain.PlaceKind
+import com.cue.domain.PlanKind
 import com.cue.domain.Reminder
 import com.cue.domain.ReminderKind
 import com.cue.domain.ReminderStatus
@@ -27,7 +28,7 @@ class Planner(
     private val scheduler: TriggerScheduler,
 ) {
     data class Desired(val key: String, val kind: String, val text: String, val fireAt: Long, val surface: String,
-                       val albumId: Long? = null, val itemId: Long? = null, val placeId: Long? = null, val meta: String = "{}")
+                       val albumId: Long? = null, val itemId: Long? = null, val placeId: Long? = null, val meta: String = "{}", val habitId: Long? = null)
 
     /** Lead time from departure to leaving home, and how early the leave-by call rings. */
     var leaveBeforeDepartureMin = 180
@@ -45,6 +46,13 @@ class Planner(
             if (!careMode) out += Desired("checkin:night", ReminderKind.CHECKIN_NIGHT, "Night check-in", n, Surface.RING)
             out += Desired("preload:morning", ReminderKind.PRELOAD, "Prepare morning call", m - 90_000, Surface.NOTIFY)
             if (!careMode) out += Desired("preload:night", ReminderKind.PRELOAD, "Prepare night call", n - 90_000, Surface.NOTIFY)
+        }
+        // A habit with a check-in time rings daily, unless it is paused then.
+        for (h in dao.habits()) {
+            val m = h.checkMinutes ?: continue
+            val at = TextKit.nextDaily(m, now, zone)
+            if (h.pausedAt(at)) continue
+            out += Desired("habit:${h.id}", ReminderKind.ACCOUNTABILITY, "${h.name} check-in", at, Surface.RING, habitId = h.id)
         }
         if (settings.practiceEnabled) {
             out += Desired("practice:daily", ReminderKind.PRACTICE, "English practice", TextKit.nextDaily(settings.practiceMinutes, now, zone), Surface.RING)
@@ -100,6 +108,52 @@ class Planner(
         return dao.place(id)
     }
 
+    /**
+     * Plans (a medicine course, a measuring routine) keep the next three days of reminders on the alarm, keyed
+     * plan:<id>:<date>:<minute>. A slot that already exists is left alone, so retries and answers survive; a slot
+     * the plan no longer has (its time moved, it was stopped) is cancelled. Returns how many were added.
+     */
+    suspend fun syncPlans(): Int {
+        val now = clock.now()
+        val zone = clock.zone
+        var added = 0
+        val wanted = mutableSetOf<String>()
+        for (item in dao.plans()) {
+            val p = PlanSpec.of(item)
+            if (Ask.isPlaceholder(p.what) && p.kind == PlanKind.MEDICINE) {
+                // A plan made with no real medicine name (the model filled in "Unknown") is switched off, not rung.
+                if (p.active) dao.updateItem(item.copy(fields = p.copy(active = false).json()))
+                continue
+            }
+            if (!p.active || (p.until in 1 until now)) continue
+            val today = TextKit.local(now, zone).toLocalDate()
+            for (d in 0..2) {
+                val day = today.plusDays(d.toLong())
+                for (m in p.times) {
+                    val at = TextKit.at(day, m, zone)
+                    if (at <= now + 30_000 || (p.until > 0 && at > p.until)) continue
+                    val key = "plan:${item.id}:$day:$m"
+                    wanted += key
+                    if (dao.reminderByKey(key) != null) continue
+                    val (kind, text) = if (p.kind == PlanKind.MEASURE) ReminderKind.MEASURE to "Check your ${MeasureWords.name(p.measure)}"
+                        else ReminderKind.DOSE to "Take ${p.what}" + (if (p.food.isNotBlank()) " ${p.food} food" else "")
+                    val r = Reminder(kind = kind, text = text, fireAt = at, surface = Surface.RING, itemId = item.id, albumId = item.albumId, key = key,
+                        meta = JSONObject().put("medicine", p.what).put("measure", p.measure).put("plan", item.id).toString(), createdAt = now)
+                    val id = dao.insertReminder(r)
+                    scheduler.schedule(r.copy(id = id))
+                    added++
+                }
+            }
+        }
+        for (r in dao.remindersWithKeyPrefix("plan:")) {
+            if (r.status == ReminderStatus.SCHEDULED && r.attempts == 0 && r.fireAt > now && r.key !in wanted) {
+                dao.updateReminder(r.copy(status = ReminderStatus.CANCELLED))
+                scheduler.cancel(r.id)
+            }
+        }
+        return added
+    }
+
     /** Makes registered reminders and geofences match what memory implies. Returns a short summary. */
     suspend fun reconcile(): String {
         val now = clock.now()
@@ -112,7 +166,7 @@ class Planner(
             val existing = dao.reminderByKey(d.key)
             if (existing == null) {
                 val r = Reminder(kind = d.kind, text = d.text, fireAt = d.fireAt, surface = d.surface, albumId = d.albumId, itemId = d.itemId,
-                    placeId = d.placeId, key = d.key, meta = d.meta, createdAt = now)
+                    placeId = d.placeId, key = d.key, meta = d.meta, habitId = d.habitId, createdAt = now)
                 val id = dao.insertReminder(r)
                 scheduler.schedule(r.copy(id = id))
                 added++
@@ -126,12 +180,15 @@ class Planner(
             }
         }
         for (r in dao.derivedReminders()) {
+            if (r.key!!.startsWith("plan:")) continue
             if (r.key !in wantKeys && r.status == ReminderStatus.SCHEDULED) {
                 dao.updateReminder(r.copy(status = ReminderStatus.CANCELLED))
                 scheduler.cancel(r.id)
                 removed++
             }
         }
+        val plans = syncPlans()
+        if (plans > 0) added += plans
         // User-made reminders (doses, accountability) are re-registered after reboot or update.
         dao.scheduledReminders().filter { it.key == null && it.fireAt > now }.forEach { scheduler.schedule(it) }
         dao.places().forEach { scheduler.registerGeofence(it) }
@@ -139,6 +196,32 @@ class Planner(
             append("updated $moved reminder${if (moved == 1) "" else "s"}")
             if (added > 0) append(", added $added")
             if (removed > 0) append(", removed $removed")
+        }
+    }
+}
+
+/** A plan's settings, read from its Item's fields. Times are minutes after midnight. */
+data class PlanSpec(
+    val kind: String,
+    val what: String,
+    val times: List<Int>,
+    val until: Long,
+    val active: Boolean,
+    val anchor: String,
+    val food: String,
+    val trackTime: Boolean,
+    val purpose: String,
+    val measure: String,
+) {
+    fun json(): String = JSONObject().put("what", what).put("times", times.joinToString(",")).put("until", until).put("active", active)
+        .put("anchor", anchor).put("food", food).put("track_time", trackTime).put("purpose", purpose).put("measure", measure).toString()
+
+    companion object {
+        fun of(item: Item): PlanSpec {
+            val f = runCatching { JSONObject(item.fields) }.getOrDefault(JSONObject())
+            return PlanSpec(item.kind, f.optString("what", item.title), f.optString("times").split(",").mapNotNull { it.trim().toIntOrNull() },
+                f.optLong("until", 0), f.optBoolean("active", true), f.optString("anchor"), f.optString("food"), f.optBoolean("track_time", false),
+                f.optString("purpose"), f.optString("measure"))
         }
     }
 }

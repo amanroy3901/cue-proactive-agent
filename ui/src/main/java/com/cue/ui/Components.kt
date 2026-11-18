@@ -3,6 +3,7 @@ package com.cue.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -181,14 +182,16 @@ fun Pill(text: String, background: Color, color: Color, modifier: Modifier = Mod
 
 /** A tickable list row: rounded square box, filled with the Qira ribbon when done. */
 @Composable
-fun CheckRow(text: String, checked: Boolean, onToggle: () -> Unit, dark: Boolean = false, highlight: Boolean = false) {
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+fun CheckRow(text: String, checked: Boolean, onToggle: () -> Unit, dark: Boolean = false, highlight: Boolean = false, onLongPress: (() -> Unit)? = null) {
     Row(
         Modifier
             .fillMaxWidth()
             .height(48.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(if (highlight) Cue.primaryTint else Color.Transparent)
-            .clickable(role = Role.Checkbox, onClick = onToggle)
+            .then(if (onLongPress != null) Modifier.combinedClickable(role = Role.Checkbox, onClick = onToggle, onLongClick = onLongPress, onLongClickLabel = "Edit")
+                else Modifier.clickable(role = Role.Checkbox, onClick = onToggle))
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

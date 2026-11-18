@@ -206,6 +206,7 @@ fun SettingsScreen(a: MainActivity, nav: Nav) {
     fun replan() { scope.launch { a.cue.engine.planner.reconcile() } }
     Page(glowA = Cue.glowLavender) {
         item { BackHeader("Settings", null, { nav.back() }) }
+        item { SoftButton("What Cue knows about you", Modifier.fillMaxWidth(), color = Color.White) { nav.go("knows") } }
         item { SectionLabel("Calls") }
         item {
             LiftCard(Modifier.fillMaxWidth()) {
@@ -359,6 +360,14 @@ fun DebugScreen(a: MainActivity, nav: Nav) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("Airport" to PlaceKind.AIRPORT, "Home" to PlaceKind.HOME, "Office" to PlaceKind.OFFICE, "Gym" to PlaceKind.GYM, "Clinic" to PlaceKind.CLINIC).forEach { (label, kind) ->
                     Chip(label) { run { Demo.arrive(engine, kind) } }
+                }
+            }
+        }
+        item { SectionLabel("Leave") }
+        item {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("Home" to PlaceKind.HOME, "Office" to PlaceKind.OFFICE, "Gym" to PlaceKind.GYM, "Clinic" to PlaceKind.CLINIC).forEach { (label, kind) ->
+                    Chip("Leave $label") { run { engine.dao.places().firstOrNull { it.kind == kind }?.let { engine.onGeofenceExit(it.id) } ?: engine.log("no $label saved") } }
                 }
             }
         }
