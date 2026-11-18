@@ -163,6 +163,7 @@ class AskSession(private val a: MainActivity) {
         scope.launch {
             withContext(Dispatchers.IO) { a.cue.engine.inbox.undo(f) }
             turns[turnIndex] = t.copy(undone = t.undone + fileIndex)
+            save()
         }
     }
 
@@ -173,6 +174,7 @@ class AskSession(private val a: MainActivity) {
             val m = withContext(Dispatchers.IO) { a.cue.engine.inbox.move(f, albumId) }
             contextAlbum = albumId
             turns[turnIndex] = t.copy(filed = t.filed.toMutableList().also { it[fileIndex] = m })
+            save()
         }
     }
 
