@@ -103,6 +103,31 @@ Results show in the chat as screens Cue composes from its own components. Calls 
 - **Spaces**: a one-line summary at the top (days left, money, who owes whom, next stop, items left).
 - Tested on the emulator: share, move, the expense, wedding planning by chat, a photo in chat, a photo during a call. Not yet tested on the razr.
 
+## Calls as a stage, deeper answers, Spaces tab (Nov 18)
+
+- **Call screen** (`call/CallStage.kt`, `CallActivity.kt`). Ringing and in-call now use the same dark full-screen stage, with drifting aurora, a star field, a floor grid, and sonar rings around Pixel that grow with the voice level.
+  - **Captions, not chat bubbles.** The line before is shown small; the current line is large and lights up word by word as Cue speaks.
+  - **Transcript button.** Opens the whole conversation.
+  - **Live panel.** Whatever Cue reads or changes sits in its own glass panel: one tab per card (List, Reminders, Habits…), marked LIVE, glowing when updated. It folds while the keyboard is open.
+  - **Action ticker.** "✓ Reminder set · …" shows under the captions for 6 s.
+  - Typing counts as presence, so the silence timer no longer hangs up mid-typing.
+- **Calls think one step ahead.** Live prompt: 1-3 sentences, mention clashes, risks and open items. Cue calls the read tools so lists show on the panel instead of being read aloud.
+- **Ask Cue reasons first.**
+  - **Model order.** Ask uses `gemini-3-flash-preview` with thinking (low), timeout 35 s. If that fails it tries `gemini-3.1-flash-lite`, then `gemini-3.5-flash-lite`, then the phone's own screens.
+  - **Reasoning shown.** The reply carries `thinking` steps, shown as a folded "Thought for N s · k steps" trail. While it works, a ticker shows what it is checking.
+  - **Richer data snapshot.** Now includes each space's status, money (spent, budget, expenses, split) and confirmed facts about the user.
+  - **Smaller prompt.** The component catalogue is sent in compact form (`CueGenUi.compactSchema`), which halves the prompt (48 KB → 22 KB). Measured on the emulator: 6.2 s per answer, down from timing out at 25 s.
+  - **Repairs.** Bare components sent without A2UI envelopes are wrapped automatically, and an error with no surface is no longer "repaired" onto a hidden surface.
+- **New A2UI components** (`genui/CueThinkComponents.kt`): CueInsight (conclusion, tone, reasons), CueTimeline, CueBars, CueProgress (ring), CueCompare (Cue's pick). The prompt asks for a composed screen: insight first, then live evidence, then visuals, then 1-3 action buttons.
+- **Navigation.** A fixed dark glass bar: Home · Spaces · (Cue orb: talk) · Ask · Apps. Spaces and Ask left the Apps grid. Pinned apps (up to 3) now sit in a quick row on Home.
+- **Guided demo.** "What's left to pack?" was replaced by two thinking steps: "Where's my trip money going?" and "Am I ready for Sunday?". Each has a local screen built from the same components if the model is busy.
+- **Tested on the emulator** (quiet_api36), both debug and the 20 MB demo build:
+  - ring screen
+  - call: list pulled up on its own, passport ticked live, reminder tab and ticker, transcript
+  - Ask: "Am I ready…" and "money" answers
+  - Spaces and Apps tabs
+- **Not yet tested on the razr:** real voice on the new stage.
+
 ## Not verified, and why
 
 - **Real speech (partly).** Since the Nov 13 morning fix, calls on LFM3 hear the user's own voice. Verified with speech played from the Mac and with Aman talking on live calls: the model transcribed "Can you add a haircut in the list?" and "Call me at 11pm every day." and both actions ran. "Aadhaar card" was heard as "other arcade" / "adha card", so Indian words can be misheard.

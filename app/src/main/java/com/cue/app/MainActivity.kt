@@ -22,6 +22,7 @@ import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.People
 import androidx.compose.material.icons.rounded.PhotoLibrary
@@ -64,6 +65,8 @@ object AppCatalog {
         AppDef("search", "Search", Icons.Rounded.Search, AppTints.lists),
     )
     fun get(key: String) = all.firstOrNull { it.key == key }
+    /** What the Apps screen lists: Spaces and Ask have their own tabs in the bar. */
+    val apps get() = all.filter { it.key !in setOf("albums", "ask") }
 }
 
 /** A tiny back stack. Routes are strings like "albums" or "album/12". */
@@ -78,7 +81,9 @@ class Nav {
 class MainActivity : ComponentActivity() {
     private val nav = Nav()
     private var onboarded by mutableStateOf(true)
-    private var pins by mutableStateOf(listOf<String>())
+    /** Apps pinned to Home's quick row. */
+    var pins by mutableStateOf(listOf<String>())
+        private set
     /** Debug preview of the bubble, since Android hides overlays under the lock screen. */
     var bubblePreview by mutableStateOf<com.cue.domain.BubbleSpec?>(null)
 
@@ -130,11 +135,12 @@ class MainActivity : ComponentActivity() {
             Route(nav.current)
             val showBar = nav.current.substringBefore('/') !in setOf("settings", "debug", "knows", "ask")
             if (showBar) {
-                val entries = listOf(NavEntry("home", "Home", Icons.Rounded.Home)) + pins.mapNotNull { AppCatalog.get(it) }.map { NavEntry(it.key, it.label, it.icon) } +
-                    NavEntry("apps", "Apps", Icons.Rounded.GridView)
-                val split = (entries.size + 1) / 2
-                val selected = nav.current.substringBefore('/').let { if (it == "album") "albums" else it }
-                CueBottomBar(entries.take(split), entries.drop(split), selected, onSelect = { nav.tab(it) }, onTalk = { talk() }, modifier = Modifier.align(Alignment.BottomCenter))
+                // Fixed tabs: Spaces is a place of its own, not one app among many. Pinned apps sit on Home.
+                val selected = nav.current.substringBefore('/').let { if (it == "album") "albums" else if (it in setOf("home", "albums", "ask")) it else "apps" }
+                CueBottomBar(
+                    listOf(NavEntry("home", "Home", Icons.Rounded.Home), NavEntry("albums", "Spaces", Icons.Rounded.Layers)),
+                    listOf(NavEntry("ask", "Ask", Icons.Rounded.AutoAwesome), NavEntry("apps", "Apps", Icons.Rounded.GridView)),
+                    selected, onSelect = { nav.tab(it) }, onTalk = { talk() }, modifier = Modifier.align(Alignment.BottomCenter))
             }
             bubblePreview?.let { spec ->
                 Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color(0xAA2A2445)).clickable { bubblePreview = null }, contentAlignment = Alignment.BottomCenter) {

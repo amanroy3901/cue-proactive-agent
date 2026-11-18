@@ -52,6 +52,8 @@ import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -65,6 +67,9 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.material.icons.automirrored.rounded.Notes
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -172,6 +177,14 @@ class CallActivity : ComponentActivity() {
     private val changes = mutableStateListOf<String>()
     /** Facts Cue picked up on this call, waiting for Keep or Remove. */
     private val learned = mutableStateListOf<com.cue.domain.ProfileFact>()
+    /** What Cue has put on screen this call: the live panel's tabs, newest selected. */
+    private val panel = mutableStateListOf<CallCard>()
+    private var panelAt by mutableStateOf(0)
+    private var panelOpen by mutableStateOf(true)
+    private var showTranscript by mutableStateOf(false)
+    /** What Cue just did ("Ticked off · Charger"), shown briefly under the captions. */
+    private val acts = mutableStateListOf<Act>()
+    private var actsSeen = 0
 
     private var kind = "TALK"
     private var reminderId: Long? = null
@@ -191,7 +204,8 @@ class CallActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // The stage is always dark: light status and navigation bar icons.
+        enableEdgeToEdge(androidx.activity.SystemBarStyle.dark(android.graphics.Color.TRANSPARENT), androidx.activity.SystemBarStyle.dark(android.graphics.Color.TRANSPARENT))
         setShowWhenLocked(true)
         setTurnScreenOn(true)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -205,6 +219,7 @@ class CallActivity : ComponentActivity() {
             // A new call arrived while the last call's summary was showing: start fresh.
             loopJob?.cancel(); voice?.release(); voice = null; flow = null
             lines.clear(); changes.clear(); seconds = 0; partial = ""; typing = false; brainLabel = ""
+            panel.clear(); acts.clear(); actsSeen = 0; showTranscript = false
             phase = Phase.RINGING
         }
         if (phase == Phase.RINGING) readIntent(intent)
@@ -248,9 +263,11 @@ class CallActivity : ComponentActivity() {
 
     /** Shows a card in the conversation; the same card asked for again moves down to the latest place. */
     private fun addCard(card: CallCard) {
-        lines.removeAll { it.card != null && sameCard(it.card, card) }
-        lines += Line("card", "", card)
+        val at = panel.indexOfFirst { sameCard(it, card) }
+        if (at >= 0) { panel[at] = card; panelAt = at } else { panel += card; panelAt = panel.lastIndex }
+        panelOpen = true
         cardVersion++
+        syncActs()
         action = pixelMoodForTool(card::class.simpleName.orEmpty().lowercase())
         actionStamp = System.currentTimeMillis()
     }
@@ -261,6 +278,20 @@ class CallActivity : ComponentActivity() {
         a is CallCard.People && b is CallCard.People -> a.personId == b.personId
         a is CallCard.Found && b is CallCard.Found -> a.itemIds == b.itemIds
         else -> a::class == b::class
+    }
+
+    /** New things the call changed become ticker entries. */
+    private fun syncActs() {
+        val all = flow?.changes().orEmpty()
+        if (all.size <= actsSeen) return
+        all.drop(actsSeen).forEach { c ->
+            val tool = c.substringBefore(":")
+            val (label, _) = summaryLabel(tool)
+            val detail = c.substringAfter(": ", "").replace(Regex("#\\d+\\s*"), "").trimStart(':', ' ', '-').take(40)
+            acts += Act(System.nanoTime(), label, detail, ok = true)
+        }
+        actsSeen = all.size
+        while (acts.size > 6) acts.removeAt(0)
     }
 
     /** Keeps [line]'s highlight on the word being heard, from [spokenNow], until [done] says the speech is over. */
@@ -351,8 +382,10 @@ class CallActivity : ComponentActivity() {
                 finishTurn()
                 cueLine = null; spokenChars = 0
                 cardVersion++
+                syncActs()
             }
             override fun onCard(card: CallCard) = ui { addCard(card) }
+            override fun onTool(name: String) = ui { syncActs() }
             override fun onEndRequested() = ui { endRequested = true; if (player == null) lifecycleScope.launch { delay(400); if (player == null) endCall() } }
             override fun onClosed(reason: String?) = ui {
                 if (!ready.isCompleted) ready.complete(false)
@@ -381,6 +414,8 @@ class CallActivity : ComponentActivity() {
         while (phase == Phase.IN_CALL) {
             delay(1000)
             typedQueue?.let { t -> typedQueue = null; f.duplex?.sendText(t); lastActivity = System.currentTimeMillis(); nudged = false }
+            // Typing, or a panel the user is reading, is not silence.
+            if (typing) { lastActivity = System.currentTimeMillis(); nudged = false }
             val quiet = System.currentTimeMillis() - lastActivity
             if (player != null || live == Live.SPEAKING) continue
             if (quiet > 20_000 && !nudged) { nudged = true; lastActivity = System.currentTimeMillis(); f.duplex?.prompt("(The user has been quiet for a while. Briefly check whether they are still there.)") }
@@ -459,6 +494,7 @@ class CallActivity : ComponentActivity() {
             val line = (cueLine ?: addLine("cue", reply.spoken)).also { it.text = reply.spoken }
             reply.card?.let { addCard(it) }
             cardVersion++
+            syncActs()
             if (player != null && reply.streamed) {
                 live = Live.SPEAKING
                 player.markDone()
@@ -592,96 +628,131 @@ class CallActivity : ComponentActivity() {
     @Composable
     private fun Ringing() {
         LaunchedEffect(Unit) { delay(32_000); if (phase == Phase.RINGING) finish() }
-        val pulse = rememberInfiniteTransition(label = "ring").animateFloat(1f, 1.12f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "p")
-        val bg = if (night) Brush.verticalGradient(listOf(Color(0xFF2E2652), Cue.night)) else Cue.sunrise
-        val fg = if (night) Cue.nightText else Color(0xFF3B1630)
-        Column(Modifier.fillMaxSize().background(bg)) {
-            Column(Modifier.weight(1f).fillMaxWidth().statusBarsPadding().padding(horizontal = 20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                Pill(java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("EEEE, h:mm a")), Color.White.copy(alpha = if (night) 0.12f else 0.65f),
-                    if (night) Cue.nightText else Cue.coralText, dot = Cue.coralDeep)
-                Spacer(Modifier.height(28.dp))
-                Box(Modifier.size(232.dp), contentAlignment = Alignment.Center) {
-                    Box(Modifier.size(220.dp).scale(pulse.value).border(1.5.dp, Cue.coralDeep.copy(alpha = 0.25f), CircleShape))
-                    Box(Modifier.size(200.dp).drawBehind { drawCircle(Brush.radialGradient(listOf((if (night) Cue.nightGlow else Cue.coral).copy(alpha = 0.4f), Color.Transparent))) })
-                    Pixel(if (night) PixelMood.RingingNight else PixelMood.Ringing, 220.dp)
-                }
-                Spacer(Modifier.height(20.dp))
-                Txt("Cue is calling", Type.bodyStrong, if (night) Cue.apricot else Cue.coralText)
-                Txt(title, Type.display.copy(fontSize = androidx.compose.ui.unit.TextUnit(32f, androidx.compose.ui.unit.TextUnitType.Sp)), fg)
-                Txt("About a minute", Type.body, if (night) Cue.nightMuted else Color(0xFF6E3A5C))
-                Spacer(Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    chips.take(2).forEach {
-                        Box(Modifier.shadow(6.dp, CircleShape, spotColor = Cue.coralDeep.copy(alpha = 0.3f)).clip(CircleShape).background(Color.White.copy(alpha = if (night) 0.12f else 0.78f)).padding(horizontal = 14.dp, vertical = 10.dp)) {
-                            Txt(it, Type.smallStrong, if (night) Cue.nightText else Cue.ink, maxLines = 1)
+        var orb by remember { mutableStateOf(Offset.Unspecified) }
+        val swell by rememberInfiniteTransition(label = "ring").animateFloat(0f, 1f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "p")
+        StageBackdrop(0.25f + 0.5f * swell, true, night, orb) {
+            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                Column(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                    StageReadout("Incoming", -1, "", true)
+                    Spacer(Modifier.height(4.dp))
+                    Txt(java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("EEEE, h:mm a")), Type.small, Stage.dim)
+                    Spacer(Modifier.height(24.dp))
+                    Box(Modifier.size(250.dp).scale(1f + 0.05f * swell).onGloballyPositioned { c ->
+                        val p = c.positionInRoot(); orb = Offset(p.x + c.size.width / 2f, p.y + c.size.height / 2f)
+                    }, contentAlignment = Alignment.Center) { Pixel(if (night) PixelMood.RingingNight else PixelMood.Ringing, 250.dp) }
+                    Spacer(Modifier.height(20.dp))
+                    Txt("CUE IS CALLING", Stage.caps, Stage.cyan)
+                    Spacer(Modifier.height(6.dp))
+                    Txt(title, Type.display, Stage.text)
+                    Txt("About a minute", Type.body, Stage.dim)
+                    Spacer(Modifier.height(16.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        chips.take(2).forEach {
+                            Box(Modifier.clip(CircleShape).background(Stage.glass).border(1.dp, Stage.glassEdge, CircleShape).padding(horizontal = 14.dp, vertical = 9.dp)) {
+                                Txt(it, Type.smallStrong, Stage.text, maxLines = 1)
+                            }
                         }
                     }
                 }
-            }
-            Column(
-                Modifier.fillMaxWidth().shadow(30.dp, RoundedCornerShape(topStart = 40.dp, topEnd = 40.dp), spotColor = Cue.coralDeep.copy(alpha = 0.4f))
-                    .clip(RoundedCornerShape(topStart = 40.dp, topEnd = 40.dp)).background(Color(0xFFFDFBFF)).navigationBarsPadding().padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(68.dp).clip(CircleShape).background(Brush.verticalGradient(listOf(Cue.coralTint, Color(0xFFFFD3CE)))).clickable(role = Role.Button, onClickLabel = "Decline") { decline() },
-                        contentAlignment = Alignment.Center) { Icon(Icons.Rounded.Close, "Decline", tint = Cue.coralText, modifier = Modifier.size(28.dp)) }
-                    PrimaryButton("Pick up", Modifier.weight(1f), icon = Icons.Rounded.Call, height = 68.dp) { accept() }
+                Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(64.dp).clip(CircleShape).background(Color(0xFFFF5F6D).copy(alpha = 0.18f)).border(1.dp, Color(0xFFFF5F6D).copy(alpha = 0.5f), CircleShape)
+                            .clickable(role = Role.Button, onClickLabel = "Decline") { decline() }, contentAlignment = Alignment.Center) {
+                            Icon(Icons.Rounded.Close, "Decline", tint = Color(0xFFFF8A94), modifier = Modifier.size(26.dp))
+                        }
+                        Row(
+                            Modifier.weight(1f).height(64.dp).scale(1f + 0.02f * swell).clip(CircleShape).background(Stage.accent)
+                                .clickable(role = Role.Button, onClickLabel = "Pick up") { accept() },
+                            horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Rounded.Call, null, tint = Color.White, modifier = Modifier.size(22.dp)); Spacer(Modifier.width(10.dp))
+                            Txt("Pick up", Type.lead, Color.White)
+                        }
+                    }
+                    Box(Modifier.fillMaxWidth().height(48.dp).clip(CircleShape).background(Stage.glass).border(1.dp, Stage.glassEdge, CircleShape).clickable(role = Role.Button) { snooze() },
+                        contentAlignment = Alignment.Center) { Txt("Ring me in 10 minutes", Type.smallStrong, Stage.text) }
                 }
-                SoftButton("Ring me in 10 minutes", Modifier.fillMaxWidth(), color = Color(0xFFF1EDFA)) { snooze() }
             }
         }
     }
 
     @Composable
     private fun InCall() {
-        val bgColor = if (night) Cue.night else Cue.base
-        val fg = if (night) Cue.nightText else Cue.ink
+        var orb by remember { mutableStateOf(Offset.Unspecified) }
+        val hasPanel = panel.isNotEmpty()
+        val compact = hasPanel && panelOpen || typing
+        val orbSize by androidx.compose.animation.core.animateDpAsState(if (compact) 128.dp else if (hasPanel) 200.dp else 250.dp, androidx.compose.animation.core.tween(500), label = "orb")
+        LaunchedEffect(actionStamp) { if (action != null) { delay(2200); action = null } }
+        val mood = action ?: when (phase) {
+            Phase.CONNECTING -> PixelMood.Connecting
+            else -> when (live) { Live.SPEAKING -> PixelMood.Speaking; Live.LISTENING -> PixelMood.Listening; Live.THINKING -> PixelMood.Thinking; Live.IDLE -> PixelMood.Idle }
+        }
+        val talking = phase == Phase.IN_CALL && (live == Live.SPEAKING || (live == Live.LISTENING && level > 0.08f))
+        val spoken = lines.filter { it.card == null && it.text.isNotBlank() }
+        val current = spoken.lastOrNull()
+        val previous = spoken.getOrNull(spoken.size - 2)
+        StageBackdrop(level, talking, night, orb) {
+            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        val state = when (phase) { Phase.CONNECTING -> "Connecting"; else -> when (live) { Live.SPEAKING -> "Speaking"; Live.LISTENING -> "Listening"; Live.THINKING -> "Thinking"; Live.IDLE -> "On call" } }
+                        StageReadout(state, seconds, brainLabel, phase == Phase.IN_CALL)
+                        Spacer(Modifier.height(4.dp))
+                        Txt(title, Type.bodyStrong, Stage.text, maxLines = 1)
+                    }
+                    GlassButton(Icons.AutoMirrored.Rounded.Notes, "Transcript", active = showTranscript, size = 44.dp) { showTranscript = !showTranscript }
+                }
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                        Box(Modifier.size(orbSize).onGloballyPositioned { c ->
+                            val p = c.positionInRoot(); orb = Offset(p.x + c.size.width / 2f, p.y + c.size.height / 2f)
+                        }, contentAlignment = Alignment.Center) { Pixel(mood, orbSize, level = level) }
+                        Spacer(Modifier.height(if (compact) 8.dp else 20.dp))
+                        Captions(previous, current, partial, compact = compact)
+                        Spacer(Modifier.height(12.dp))
+                        var tick by remember { mutableStateOf(System.nanoTime()) }
+                        LaunchedEffect(Unit) { while (true) { delay(1000); tick = System.nanoTime() } }
+                        ActivityTicker(acts.filter { tick - it.stamp < 6_000_000_000L }.takeLast(2))
+                    }
+                }
+                val ime = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
+                if (hasPanel) LivePanel(panel.toList(), panelAt.coerceIn(0, panel.lastIndex), panelOpen && !ime, cardVersion, onSelect = { panelAt = it; panelOpen = true }, onToggle = { panelOpen = !panelOpen })
+                if (typing) Box(Modifier.padding(horizontal = 16.dp).padding(top = 10.dp)) { TypeBar() }
+                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    GlassButton(Icons.AutoMirrored.Rounded.VolumeUp, if (voice?.speakerOn != false) "Speaker on" else "Speaker off", active = voice?.speakerOn != false) { voice?.let { it.speakerOn = !it.speakerOn } }
+                    GlassButton(Icons.Rounded.AddPhotoAlternate, "Add photo") {
+                        pickPhotos.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    }
+                    GlassButton(if (typing) Icons.Rounded.Mic else Icons.Rounded.Keyboard, if (typing) "Talk instead" else "Type instead", active = typing) {
+                        typing = !typing; if (typing) voice?.cancelListening()
+                    }
+                    Row(
+                        Modifier.weight(1f).height(58.dp).clip(CircleShape).background(Brush.horizontalGradient(listOf(Color(0xFFFF5F6D), Color(0xFFE0458F))))
+                            .clickable(role = Role.Button, onClickLabel = "End call") { endCall() },
+                        horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Rounded.CallEnd, null, tint = Color.White, modifier = Modifier.size(22.dp)); Spacer(Modifier.width(8.dp))
+                        Txt("End", Type.bodyStrong, Color.White)
+                    }
+                }
+            }
+            if (showTranscript) Transcript()
+        }
+    }
+
+    /** The whole conversation so far, over the stage. */
+    @Composable
+    private fun Transcript() {
         val listState = rememberLazyListState()
-        val tail = lines.lastOrNull()?.text?.length ?: 0
-        LaunchedEffect(lines.size, partial, tail / 40) { if (lines.isNotEmpty()) listState.animateScrollToItem(lines.size) }
-        Column(
-            Modifier.fillMaxSize().background(bgColor).drawBehind {
-                drawRect(Brush.radialGradient(listOf(if (night) Cue.nightGlow.copy(alpha = 0.35f) else Cue.glowLavender, Color.Transparent), center = Offset(size.width / 2, 0f), radius = size.width * 1.1f))
-            }.statusBarsPadding().navigationBarsPadding().imePadding().padding(horizontal = 18.dp),
-        ) {
-            Spacer(Modifier.height(8.dp))
-            Row(
-                Modifier.fillMaxWidth().shadow(12.dp, CircleShape, spotColor = Cue.primaryDeep.copy(alpha = 0.3f)).clip(CircleShape)
-                    .background(if (night) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.85f)).padding(start = 8.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Txt(title, Type.bodyStrong, fg, maxLines = 1)
-                    val state = when (phase) { Phase.CONNECTING -> "Connecting"; else -> when (live) { Live.SPEAKING -> "Speaking"; Live.LISTENING -> "Listening"; Live.THINKING -> "Thinking"; Live.IDLE -> "On call" } }
-                    Txt("$state · ${seconds / 60}:${"%02d".format(seconds % 60)}" + if (brainLabel.isNotEmpty()) " · $brainLabel" else "", Type.smallStrong, if (night) Cue.apricot else Cue.primaryDeep, maxLines = 1)
-                }
-                Wave(live == Live.LISTENING, level)
+        LaunchedEffect(lines.size) { if (lines.isNotEmpty()) listState.scrollToItem(lines.size - 1) }
+        Column(Modifier.fillMaxSize().background(Color(0xF00A0820)).clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) {}
+            .statusBarsPadding().navigationBarsPadding().padding(horizontal = 18.dp)) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Txt("TRANSCRIPT", Stage.caps, Stage.dim, modifier = Modifier.weight(1f))
+                GlassButton(Icons.Rounded.Close, "Close transcript", size = 44.dp) { showTranscript = false }
             }
-            LaunchedEffect(actionStamp) { if (action != null) { delay(2200); action = null } }
-            val mood = action ?: when (phase) {
-                Phase.CONNECTING -> PixelMood.Connecting
-                else -> when (live) { Live.SPEAKING -> PixelMood.Speaking; Live.LISTENING -> PixelMood.Listening; Live.THINKING -> PixelMood.Thinking; Live.IDLE -> PixelMood.Idle }
-            }
-            Box(Modifier.fillMaxWidth().padding(top = 6.dp), contentAlignment = Alignment.Center) { Pixel(mood, 150.dp, level = level) }
-            LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 14.dp)) {
-                items(lines) { l ->
-                    if (l.card != null) CallCardView(l.card, cardVersion, night)
-                    else if (l.text.isNotBlank()) Bubble(l.who == "user", l.text, spoken = l.spoken)
-                }
-                if (partial.isNotBlank()) item { Bubble(true, partial, faded = true) }
-            }
-            if (typing) TypeBar()
-            Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                RoundControl(Icons.AutoMirrored.Rounded.VolumeUp, if (voice?.speakerOn != false) "Speaker on" else "Speaker off", active = voice?.speakerOn != false) { voice?.let { it.speakerOn = !it.speakerOn } }
-                RoundControl(Icons.Rounded.AddPhotoAlternate, "Add photo", active = false) {
-                    pickPhotos.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                }
-                RoundControl(if (typing) Icons.Rounded.Mic else Icons.Rounded.Keyboard, if (typing) "Talk instead" else "Type instead", active = typing) {
-                    typing = !typing; if (typing) voice?.cancelListening()
-                }
-                PrimaryButton("End call", Modifier.weight(1f), brush = Cue.coralButton, shadow = Cue.coralDeep, icon = Icons.Rounded.CallEnd, height = 62.dp) { endCall() }
+            LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 20.dp)) {
+                items(lines.filter { it.card == null && it.text.isNotBlank() }) { l -> Bubble(l.who == "user", l.text) }
             }
         }
     }
@@ -711,12 +782,12 @@ class CallActivity : ComponentActivity() {
     private fun Bubble(user: Boolean, text: String, faded: Boolean = false, spoken: Int = -1) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = if (user) Arrangement.End else Arrangement.Start) {
             val shape = if (user) RoundedCornerShape(24.dp, 24.dp, 8.dp, 24.dp) else RoundedCornerShape(24.dp, 24.dp, 24.dp, 8.dp)
-            val ink = if (user) Color.White.copy(alpha = if (faded) 0.7f else 1f) else if (night) Cue.nightText else Cue.ink
+            val ink = if (user) Color.White.copy(alpha = if (faded) 0.7f else 1f) else Stage.text
             Box(
                 Modifier.widthIn(max = 290.dp)
                     .shadow(if (faded) 0.dp else 10.dp, shape, spotColor = if (user) Cue.primaryDeep.copy(alpha = 0.5f) else Color.Black.copy(alpha = 0.18f))
                     .clip(shape)
-                    .background(if (user) Cue.primaryBrush else Brush.linearGradient(listOf(if (night) Cue.nightRaised else Color.White, if (night) Cue.nightRaised else Color.White)))
+                    .background(if (user) Cue.primaryBrush else Brush.linearGradient(listOf(Color.White.copy(alpha = 0.09f), Color.White.copy(alpha = 0.06f))))
                     .padding(horizontal = 18.dp, vertical = 13.dp),
             ) {
                 if (user || spoken < 0) Txt(text, Type.body, ink)

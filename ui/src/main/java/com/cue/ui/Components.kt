@@ -16,6 +16,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.runtime.getValue
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -33,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -238,36 +242,42 @@ fun SectionLabel(text: String, trailing: String? = null) {
 
 data class NavEntry(val key: String, val label: String, val icon: ImageVector)
 
-/** The frosted floating bar: Home, two pinned apps, raised Talk, Apps. */
+/**
+ * The floating bar: a dark glass capsule with Cue's orb in the middle (tap to talk). [left] and [right] are the two
+ * tabs either side of it.
+ */
 @Composable
 fun CueBottomBar(left: List<NavEntry>, right: List<NavEntry>, selected: String, onSelect: (String) -> Unit, onTalk: () -> Unit, modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxWidth().padding(horizontal = 14.dp).padding(bottom = 14.dp)) {
+    val spin by androidx.compose.animation.core.rememberInfiniteTransition(label = "orb").animateFloat(0f, 360f,
+        androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(6000, easing = androidx.compose.animation.core.LinearEasing)), label = "spin")
+    Box(modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp).padding(bottom = 10.dp)) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .shadow(20.dp, RoundedCornerShape(36.dp), spotColor = Cue.primaryDeep.copy(alpha = 0.35f))
-                .clip(RoundedCornerShape(36.dp))
-                .background(Color.White.copy(alpha = 0.92f))
-                .border(1.dp, Color.White, RoundedCornerShape(36.dp))
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                .padding(top = 14.dp)
+                .shadow(24.dp, RoundedCornerShape(30.dp), spotColor = Color(0xFF3A2A9E), ambientColor = Color(0xFF3A2A9E))
+                .clip(RoundedCornerShape(30.dp))
+                .background(Brush.verticalGradient(listOf(Color(0xFF1C1838), Color(0xFF110E26))))
+                .border(1.dp, Brush.linearGradient(listOf(Color(0x667C5CFF), Color(0x334FD8F7), Color(0x14FFFFFF))), RoundedCornerShape(30.dp))
+                .padding(horizontal = 8.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Row(Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly) { left.forEach { NavItem(it, it.key == selected) { onSelect(it.key) } } }
-            Spacer(Modifier.width(64.dp))
+            Spacer(Modifier.width(76.dp))
             Row(Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly) { right.forEach { NavItem(it, it.key == selected) { onSelect(it.key) } } }
         }
+        // Cue's orb: a spinning aurora ring around a dark core.
         Box(
-            Modifier
-                .align(Alignment.TopCenter)
-                .offset(y = (-18).dp)
-                .size(64.dp)
-                .shadow(14.dp, CircleShape, spotColor = Cue.primaryDeep)
+            Modifier.align(Alignment.TopCenter).size(70.dp)
+                .shadow(18.dp, CircleShape, spotColor = Color(0xFF7C5CFF), ambientColor = Color(0xFF4FD8F7))
                 .clip(CircleShape)
-                .background(Cue.base)
-                .padding(4.dp)
-                .clip(CircleShape)
-                .background(Cue.ribbonBrush)
+                .drawBehind {
+                    rotate(spin) {
+                        drawCircle(Brush.sweepGradient(listOf(Color(0xFF7C5CFF), Color(0xFF4FD8F7), Color(0xFFE0458F), Color(0xFF7C5CFF))))
+                    }
+                    drawCircle(Brush.radialGradient(listOf(Color(0xFF2A2160), Color(0xFF0E0B22))), radius = size.minDimension / 2 - 3.dp.toPx())
+                    drawCircle(Brush.radialGradient(listOf(Color(0x664FD8F7), Color.Transparent)), radius = size.minDimension / 3)
+                }
                 .clickable(role = Role.Button, onClickLabel = "Talk to Cue", onClick = onTalk),
             contentAlignment = Alignment.Center,
         ) { Icon(Icons.Rounded.Mic, contentDescription = "Talk to Cue", tint = Color.White, modifier = Modifier.size(26.dp)) }
@@ -277,14 +287,15 @@ fun CueBottomBar(left: List<NavEntry>, right: List<NavEntry>, selected: String, 
 @Composable
 private fun RowScope.NavItem(e: NavEntry, selected: Boolean, onClick: () -> Unit) {
     Column(
-        Modifier.weight(1f).clip(RoundedCornerShape(18.dp)).clickable(role = Role.Tab, onClick = onClick),
+        Modifier.weight(1f).clip(RoundedCornerShape(18.dp)).clickable(role = Role.Tab, onClick = onClick).padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
-            Modifier.width(48.dp).height(30.dp).clip(CircleShape).background(if (selected) Cue.primaryTint else Color.Transparent),
+            Modifier.width(46.dp).height(30.dp).clip(CircleShape)
+                .background(if (selected) Brush.linearGradient(listOf(Color(0x557C5CFF), Color(0x334FD8F7))) else Brush.linearGradient(listOf(Color.Transparent, Color.Transparent))),
             contentAlignment = Alignment.Center,
-        ) { Icon(e.icon, contentDescription = null, tint = if (selected) Cue.primaryDeep else Cue.muted, modifier = Modifier.size(22.dp)) }
-        Text(e.label, style = Type.tiny.copy(color = if (selected) Cue.primaryDeep else Cue.muted, fontWeight = if (selected) androidx.compose.ui.text.font.FontWeight(800) else androidx.compose.ui.text.font.FontWeight(600)), maxLines = 1)
+        ) { Icon(e.icon, contentDescription = null, tint = if (selected) Color.White else Color(0xFF9C97C2), modifier = Modifier.size(22.dp)) }
+        Text(e.label, style = Type.tiny.copy(color = if (selected) Color.White else Color(0xFF9C97C2), fontWeight = if (selected) androidx.compose.ui.text.font.FontWeight(800) else androidx.compose.ui.text.font.FontWeight(600)), maxLines = 1)
     }
 }
 

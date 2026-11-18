@@ -167,7 +167,7 @@ class PrefSettings(context: Context) : Settings {
     override var practiceEnabled: Boolean get() = p.getBoolean("practice", false); set(v) = p.edit().putBoolean("practice", v).apply()
     override var practiceMinutes: Int get() = p.getInt("practiceAt", 19 * 60); set(v) = p.edit().putInt("practiceAt", v).apply()
     override var pinnedApps: List<String>
-        get() = p.getString("pins", "lists,habits")!!.split(",").filter { it.isNotBlank() }
+        get() = p.getString("pins", "lists,habits,reminders")!!.split(",").filter { it.isNotBlank() && it !in setOf("albums", "ask") }
         set(v) = p.edit().putString("pins", v.take(3).joinToString(",")).apply()
     override var onboarded: Boolean get() = p.getBoolean("onboarded", false); set(v) = p.edit().putBoolean("onboarded", v).apply()
     // Online (Gemini) by default since 2026-11-13; older installs move to it once ("brain2").

@@ -4,6 +4,10 @@ import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.border
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -87,6 +91,8 @@ data class AskTurn(
     val filed: List<Inbox.Filed> = emptyList(), val undone: Set<Int> = emptySet(),
     val question: PlanQuestion? = null, val answered: Boolean = false,
     val preview: SpaceSpec? = null, val openAlbum: Long? = null,
+    /** How Cue worked the answer out (short steps), and how long it thought. */
+    val thoughts: List<String> = emptyList(), val thinkMs: Long = 0,
 )
 
 class AskSession(private val a: MainActivity) {
@@ -324,9 +330,76 @@ class AskSession(private val a: MainActivity) {
         fileAll(hint, listOf(Attachment(path, name, photo = true)))
     }
 
-    private suspend fun tourAsk(text: String, plan: Boolean = false) {
+    private suspend fun tourAsk(text: String, plan: Boolean = false, fallback: (suspend () -> Unit)? = null) {
         turns += AskTurn(true, text)
-        if (plan) startPlan(text) else answer()
+        if (plan) startPlan(text) else answer(fallback)
+    }
+
+    /** "Am I ready?" worked out on the phone, for when the model can't answer in time. */
+    private suspend fun readyScreen() {
+        val engine = a.cue.engine; val dao = engine.dao
+        val trip = tourTrip ?: return
+        val list = dao.itemsInAlbum(trip).firstOrNull { it.type == ItemType.CHECKLIST }
+        val es = list?.let { dao.entries(it.id) }.orEmpty()
+        val open = es.filter { !it.checked }
+        val flight = dao.itemByHash("demo-ticket")?.eventStart
+        val b = dao.blocks(trip).firstOrNull { it.type == BlockType.EXPENSES }
+        val spent = b?.let { Spaces.expenses(dao.records(it.id)).sumOf { e -> e.amount } } ?: 0
+        val budget = b?.let { Spaces.budget(it) } ?: 0
+        val fl = flight?.let { TextKit.dayLabel(it, System.currentTimeMillis(), zone) + " " + TextKit.clock(it, zone) } ?: "Sunday 6:00 PM"
+        val points = JSONArray(listOfNotNull(
+            open.takeIf { it.isNotEmpty() }?.let { "Still to pack: " + it.joinToString { e -> e.text } },
+            "Flight $fl: leave home by 3:30 for the airport",
+            if (budget > 0) "₹${Spaces.money(spent)} of ₹${Spaces.money(budget)} spent, well inside budget" else null))
+        turns += AskTurn(false, "Almost. ${if (open.isEmpty()) "You're packed." else "${open.size} thing${if (open.size == 1) "" else "s"} to pack,"} and the cab isn't booked yet. Want me to set a reminder for it?", "t${++count}".also { id ->
+            val comps = JSONArray()
+            fun add(o: JSONObject) { comps.put(o) }
+            add(c("root", "Column", "children" to JSONArray(listOfNotNull("ins", "rings", "tl", list?.let { "list" }, "acts"))))
+            add(c("ins", "CueInsight", "title" to (if (open.isEmpty()) "Packed, just book the cab" else "${open.size} things before Sunday"), "tone" to (if (open.isEmpty()) "heads_up" else "risk"),
+                "body" to "Your flight leaves $fl. Here's what's still open.", "points" to points))
+            add(c("rings", "Row", "children" to JSONArray(listOf("p1", "p2"))))
+            add(c("p1", "CueProgress", "label" to "Packed", "value" to es.count { it.checked }, "max" to es.size.coerceAtLeast(1), "caption" to "${es.count { it.checked }} of ${es.size} items"))
+            add(c("p2", "CueProgress", "label" to "Budget used", "value" to spent, "max" to budget.coerceAtLeast(1), "caption" to "₹${Spaces.money(spent)} of ₹${Spaces.money(budget)}"))
+            add(c("tl", "CueTimeline", "title" to "Flight day", "steps" to JSONArray(listOf(
+                JSONObject().put("time", "7:30 AM").put("title", "Morning call").put("note", "I'll go over the list with you").put("state", "done"),
+                JSONObject().put("time", "2:00 PM").put("title", "Pack the last things").put("note", open.joinToString { it.text }.ifBlank { "Nothing left" }).put("state", "now"),
+                JSONObject().put("time", "3:30 PM").put("title", "Cab to the airport").put("note", "Not booked yet").put("state", "next"),
+                JSONObject().put("time", "6:00 PM").put("title", "Flight to Delhi").put("note", "Boarding pass pops up at the airport").put("state", "next")))))
+            list?.let { add(c("list", "CueList", "listId" to it.id, "showDone" to false)) }
+            add(c("acts", "Row", "children" to JSONArray(listOf("b1", "b2"))))
+            add(c("b1", "Button", "child" to "b1t", "action" to JSONObject().put("event", JSONObject().put("name", "reminder_set").put("context", JSONObject().put("text", "Book the cab to the airport").put("when", "tomorrow 10 am")))))
+            add(c("b1t", "Text", "text" to "Remind me to book the cab"))
+            add(c("b2", "Button", "child" to "b2t", "action" to JSONObject().put("event", JSONObject().put("name", "ask").put("context", JSONObject().put("text", "What should I do in Delhi on Saturday?")))))
+            add(c("b2t", "Text", "text" to "Plan Saturday"))
+            genUi.feedAll(JSONArray().put(JSONObject().put("updateComponents", JSONObject().put("components", comps))), id)
+        }, thoughts = listOfNotNull("Flight is $fl", open.takeIf { it.isNotEmpty() }?.let { "Packing list still has ${it.joinToString { e -> e.text }}" }, "No cab or reminder set for the airport",
+            "Trip money is fine: ₹${Spaces.money(spent)} spent"), thinkMs = 1200)
+        save()
+    }
+
+    /** "Where is the money going?" worked out on the phone. */
+    private suspend fun moneyInsight() {
+        val dao = a.cue.engine.dao
+        val trip = tourTrip ?: return
+        val b = dao.blocks(trip).firstOrNull { it.type == BlockType.EXPENSES } ?: return
+        val ex = Spaces.expenses(dao.records(b.id))
+        val total = ex.sumOf { it.amount }
+        val budget = Spaces.budget(b) ?: 0
+        val owe = Spaces.settle(ex, Spaces.people(b)).firstOrNull()
+        val top = ex.maxByOrNull { it.amount }
+        val id = "t${++count}"
+        val comps = JSONArray()
+        comps.put(c("root", "Column", "children" to JSONArray(listOfNotNull("ins", "bars", "p", "acts"))))
+        comps.put(c("ins", "CueInsight", "title" to "On track: ₹${Spaces.money(total)} of ₹${Spaces.money(budget)}", "tone" to "good",
+            "body" to (top?.let { "${it.what} is the biggest cost so far." } ?: "Nothing spent yet."),
+            "points" to JSONArray(listOfNotNull(owe, if (budget > 0) "₹${Spaces.money(budget - total)} left for the rest of the trip" else null))))
+        comps.put(c("bars", "CueBars", "title" to "Spent so far", "labels" to JSONArray(ex.map { it.what }), "values" to JSONArray(ex.map { it.amount }), "unit" to "₹"))
+        comps.put(c("p", "CueProgress", "label" to "Budget used", "value" to total, "max" to budget.coerceAtLeast(1), "caption" to "₹${Spaces.money(total)} of ₹${Spaces.money(budget)}"))
+        comps.put(c("acts", "Button", "child" to "at", "action" to JSONObject().put("event", JSONObject().put("name", "ask").put("context", JSONObject().put("text", "How should Riya and I settle up?")))))
+        comps.put(c("at", "Text", "text" to "Settle up with Riya"))
+        genUi.feedAll(JSONArray().put(JSONObject().put("updateComponents", JSONObject().put("components", comps))), id)
+        turns += AskTurn(false, "You're well within budget. ${owe ?: ""}".trim(), id, thoughts = listOfNotNull("Read the Delhi trip's expenses", top?.let { "Biggest: ${it.what} ₹${Spaces.money(it.amount)}" }, owe), thinkMs = 900)
+        save()
     }
 
     private val tourSteps: List<TourStep> = listOf(
@@ -350,8 +423,13 @@ class AskSession(private val a: MainActivity) {
             tourTrip?.let { moneyScreen(it) }
             tip("One photo: Cue read it, put it in the Delhi trip, and split it with Riya. Undo and Move are right there.")
         },
-        TourStep("Ask: what's left to pack?") {
-            tourAsk("What's left to pack for Delhi?")
+        TourStep("Ask: where's my trip money going?") {
+            tourAsk("Where's my Delhi trip money going? Am I on budget?") { moneyInsight() }
+            tip("Cue thought it through: tap \"Thought for…\" to see how. The bars and rings are generated UI.")
+        },
+        TourStep("Ask: am I ready for Sunday?") {
+            tourAsk("Am I ready for Sunday?") { readyScreen() }
+            tip("A vague question: Cue connects the flight, the packing list, the cab and the money, and says what's at risk.")
         },
         TourStep("Plan my sister's wedding") {
             tourAsk("I'm planning my sister's wedding", plan = true)
@@ -475,11 +553,14 @@ class AskSession(private val a: MainActivity) {
         prefs.edit().clear().apply()
     }
 
-    private suspend fun answer() {
+    private suspend fun answer(fallback: (suspend () -> Unit)? = null) {
         thinking = true
         val surfaceId = "s${++count}"
+        val started = System.currentTimeMillis()
         val reply = runCatching { withContext(Dispatchers.IO) { callModel(surfaceId) } }.onFailure { Log.w("CueAsk", "model", it) }.getOrNull()
+        val tookMs = System.currentTimeMillis() - started
         val json = reply?.let { runCatching { JSONObject(it.removePrefix("```json").removeSuffix("```").trim()) }.getOrNull() }
+        if (json == null && fallback != null) { thinking = false; fallback(); return }
         if (json == null) {
             // Offline, no key, or a reply that isn't JSON: answer from the phone with a fixed screen.
             val local = LocalScreens.forQuestion(turns.last { it.fromUser }.text, a.cue.engine.dao)
@@ -501,7 +582,9 @@ class AskSession(private val a: MainActivity) {
         }
         val ui = json.optJSONArray("ui")
         if (ui != null && ui.length() > 0) runCatching { genUi.feedAll(ui, surfaceId) }.onFailure { Log.w("CueAsk", "feed", it) }
-        turns += AskTurn(false, json.optString("say").ifBlank { if (ran.isNotEmpty()) "Done." else "Here you go." }, if (ui != null && ui.length() > 0) surfaceId else null)
+        val thoughts = json.optJSONArray("thinking")?.let { arr -> (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotBlank() }.take(6) }.orEmpty()
+        turns += AskTurn(false, json.optString("say").ifBlank { if (ran.isNotEmpty()) "Done." else "Here you go." }, if (ui != null && ui.length() > 0) surfaceId else null,
+            thoughts = thoughts, thinkMs = tookMs)
         ran.forEach { turns += AskTurn(false, it, note = true) }
         thinking = false
         save()
@@ -522,6 +605,8 @@ class AskSession(private val a: MainActivity) {
 
     /** The renderer rejected part of a screen: tell the model once and let it redraw. */
     private suspend fun repair(surfaceId: String, error: String) {
+        // Only screens a turn shows can be repaired; an envelope error has no surface of its own.
+        if (turns.none { it.surfaceId == surfaceId }) return
         if (!repairs.add(surfaceId) || a.cue.gemini.configured.not()) return
         val reply = withContext(Dispatchers.IO) {
             a.cue.gemini.chatJson(systemPrompt(surfaceId), history() + ("user" to "The screen $surfaceId failed to render: $error. Send the whole screen again as corrected ui messages for surface $surfaceId."))
@@ -537,32 +622,52 @@ class AskSession(private val a: MainActivity) {
 
     private suspend fun callModel(surfaceId: String): String? {
         if (!a.cue.gemini.configured) return null
-        return a.cue.gemini.chatJson(systemPrompt(surfaceId), history().dropLast(1) + ("user" to (snapshot() + "\n\nQUESTION: " + turns.last { it.fromUser }.text)))
+        val sys = systemPrompt(surfaceId)
+        val convo = history().dropLast(1) + ("user" to (snapshot() + "\n\nQUESTION: " + turns.last { it.fromUser }.text))
+        if ((a.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0)
+            runCatching { java.io.File(a.filesDir, "last_ask_prompt.txt").writeText(sys + "\n\n=====\n" + convo.joinToString("\n---\n") { it.first + ": " + it.second }) }
+        val r = a.cue.gemini.thinkJson(sys, convo)
+        r?.let { Log.i("CueAsk", "answered by ${it.second}") }
+        return r?.first
     }
 
     private fun systemPrompt(surfaceId: String): String = """
-        You are Cue, a personal assistant on the user's phone. The user is TYPING to you; answer in text and draw the answer as a small native screen.
+        You are Cue, the user's personal chief of staff on their phone. You know their lists, spaces (trips, events, health), reminders, habits, papers, people and money from the DATA below.
+        The user is TYPING. Don't just look things up: THINK like a sharp assistant who knows their whole life.
+        1. What do they really need? (Read between the lines: "am I ready for Sunday" means flight + packing + cab + money + anything clashing.)
+        2. Connect the dots across their data: dates that clash, things still open, money vs budget, people waiting on them, habits slipping, a paper that expires.
+        3. Find what they didn't ask but should know: the risk, the clash, the next step, the pattern. Be specific, with their real names, numbers and times.
+        4. Recommend. Have an opinion. Offer the 1-3 next actions as buttons.
+        Never invent data that isn't below. If something important is unknown (weather, traffic), say so briefly or suggest checking it.
+
         Reply with ONE JSON object, nothing else:
-        {"say": "1-2 short sentences", "tools": [ {"name": "...", "args": {...}} ], "ui": [ A2UI messages ]}
+        {"thinking": ["3-5 short steps, how you worked it out, citing their data by name (never the #numbers), e.g. 'Flight Sun 6 PM; passport still unpacked'"],
+         "say": "1-3 sentences: the answer and your recommendation, warm and direct",
+         "tools": [ {"name": "...", "args": {...}} ],
+         "ui": [ A2UI messages ]}
 
         TOOLS: put a tool in "tools" only when the user clearly asked you to change something now (add, tick, set, move, delete). Otherwise leave it empty and offer the change as a button.
         Tool list (args are strings):
         ${toolList()}
 
-        UI: "ui" is a list of A2UI v0.9 messages for surface "$surfaceId":
+        UI: almost every answer gets a screen. "ui" is a list of A2UI v0.9 messages for surface "$surfaceId":
         1. {"version":"v0.9","createSurface":{"surfaceId":"$surfaceId","catalogId":"${CueCatalog.ID}"}}
         2. {"version":"v0.9","updateComponents":{"surfaceId":"$surfaceId","components":[ ...flat list, one component must have "id":"root"... ]}}
         3. optional {"version":"v0.9","updateDataModel":{"surfaceId":"$surfaceId","path":"/form","value":{...}}} to pre-fill form fields.
-        Each component is {"id":"...","component":"<Name>", ...its properties}. Children are referenced by id ("child":"id" or "children":["a","b"]). Keep it small: 3 to 12 components.
-        Prefer Cue's own components (CueList, CueReminders, CueHabit, CuePaper, CueNote, CuePerson, CueSpace, CueStat, CueOpen): they show the user's real data live from the phone by its number.
-        Never copy private details (PNR, seat, amounts, medicine doses, lab values) into Text; show the paper with CuePaper and it fills them in itself.
+        Each component is {"id":"...","component":"<Name>", ...its properties}. Children are referenced by id ("child":"id" or "children":["a","b"]).
+        Compose a real screen, 4 to 14 components, root a Column, in this order:
+          - Lead with a CueInsight: your conclusion and its reasons (tone risk / heads_up / good / idea).
+          - Then the evidence, live: CueList, CueReminders, CueHabit, CuePaper, CuePerson, CueSpace (they draw the user's real data by its number).
+          - Then the thinking made visual when it fits: CueTimeline for a plan or a day, CueBars for money or comparisons, CueProgress in a Row for how far along, CueCompare for a decision, CueStat tiles in a Row for key numbers.
+          - End with 1-3 Buttons for the next actions.
+        Never copy private details (PNR, seat, amounts on papers, medicine doses, lab values) into Text; show the paper with CuePaper and it fills them in itself.
         A Button needs a child Text: {"id":"b1","component":"Button","child":"b1t","action":{"event":{"name":"<tool name>","context":{...tool args...}}}}.
         Context values can read form fields: {"path":"/form/text"}. Bind a TextField with "value":{"path":"/form/text"}.
-        A button with event name "ask" and context {"text":"..."} asks you that follow-up. Offer 1-3 useful next steps as buttons when it helps.
-        For a question with nothing to show, send a single Text root, or leave "ui" empty.
+        A button with event name "ask" and context {"text":"..."} asks you that follow-up.
+        Only for small talk, send a single Text root or leave "ui" empty.
 
-        CATALOG (JSON Schema of every component you may use):
-        ${genUi.schema}
+        CATALOG (every component you may use, with its properties):
+        ${genUi.compactSchema}
     """.trimIndent()
 
     private fun toolList(): String = CueTools.live.filter { it.name != "end_call" }.joinToString("\n") { t ->
@@ -596,7 +701,22 @@ class AskSession(private val a: MainActivity) {
         sb.append("JOURNAL:\n"); dao.itemsOfType(ItemType.JOURNAL).take(5).forEach { j -> sb.append("  #${j.id} ${TextKit.dateLabel(j.eventStart ?: j.createdAt, zone)}\n") }
         val pending = dao.allOpenPending()
         sb.append("PEOPLE:\n"); pending.groupBy { it.personId }.forEach { (pid, ps) -> sb.append("  #$pid ${dao.person(pid)?.name}: ${ps.size} pending (${ps.take(3).joinToString { it.text }})\n") }
-        sb.append("SPACES:\n"); albums.take(10).forEach { al -> sb.append("  #${al.id} ${al.title} (${al.kind.lowercase()}${al.startAt?.let { ", " + TextKit.dateLabel(it, zone) } ?: ""})\n") }
+        sb.append("SPACES:\n"); albums.take(10).forEach { al ->
+            sb.append("  #${al.id} ${al.title} (${al.kind.lowercase()}${al.startAt?.let { ", " + TextKit.dateLabel(it, zone) + " " + TextKit.clock(it, zone) } ?: ""}${al.endAt?.let { " to " + TextKit.dateLabel(it, zone) } ?: ""})\n")
+            val bs = dao.blocks(al.id)
+            val recs = bs.flatMap { dao.records(it.id) }
+            val es = dao.itemsInAlbum(al.id).filter { it.type == ItemType.CHECKLIST }.flatMap { dao.entries(it.id) }
+            Spaces.summary(al, bs, recs, es, now, zone).takeIf { it.isNotBlank() }?.let { sb.append("    status: $it\n") }
+            bs.firstOrNull { it.type == BlockType.EXPENSES }?.let { b ->
+                val ex = Spaces.expenses(dao.records(b.id))
+                if (ex.isNotEmpty() || Spaces.budget(b) != null) {
+                    sb.append("    money: spent ₹${Spaces.money(ex.sumOf { it.amount })}${Spaces.budget(b)?.let { " of ₹" + Spaces.money(it) + " budget" } ?: ""}; ")
+                    sb.append(ex.take(8).joinToString { "${it.what} ₹${Spaces.money(it.amount)}${if (it.paidBy.isNotBlank()) " (paid by ${it.paidBy})" else ""}" }).append('\n')
+                    Spaces.settle(ex, Spaces.people(b)).firstOrNull()?.let { sb.append("    split: $it\n") }
+                }
+            }
+        }
+        dao.facts().filter { it.confirmed }.take(12).takeIf { it.isNotEmpty() }?.let { fs -> sb.append("ABOUT THE USER:\n"); fs.forEach { sb.append("  - ${it.text}\n") } }
         sb.toString()
     }
 }
@@ -697,6 +817,7 @@ fun AskScreen(a: MainActivity, nav: Nav) {
                         }
                         t.note -> Txt(t.text, Type.small, Cue.muted, modifier = Modifier.padding(start = 44.dp))
                         else -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (t.thoughts.isNotEmpty()) ThoughtTrail(t.thoughts, t.thinkMs)
                             if (t.text.isNotBlank()) Row(verticalAlignment = Alignment.Top) {
                                 PixelHead(34.dp); Spacer(Modifier.width(10.dp))
                                 Txt(t.text, Type.body, modifier = Modifier.clip(RoundedCornerShape(6.dp, 20.dp, 20.dp, 20.dp)).background(Color.White).padding(horizontal = 14.dp, vertical = 10.dp))
@@ -715,7 +836,7 @@ fun AskScreen(a: MainActivity, nav: Nav) {
                         }
                     }
                 }
-                if (session.thinking) item { Row(verticalAlignment = Alignment.CenterVertically) { Pixel(PixelMood.Idle, 40.dp); Spacer(Modifier.width(8.dp)); Txt("Working on it…", Type.small, Cue.muted) } }
+                if (session.thinking) item { ThinkingTicker() }
             }
             session.tourNext?.let { step ->
                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 6.dp).clip(RoundedCornerShape(22.dp)).background(Cue.primaryBrush)
@@ -797,6 +918,54 @@ private fun PlanPreview(s: SpaceSpec, onDrop: (Int) -> Unit, onMake: () -> Unit,
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SoftButton("Cancel", Modifier.weight(1f), color = Color.White.copy(alpha = 0.2f), textColor = Color.White, height = 46.dp) { onCancel() }
             SoftButton("Make it", Modifier.weight(1f), color = Color.White, textColor = Cue.primaryDeep, height = 46.dp) { onMake() }
+        }
+    }
+}
+
+
+/** Cue's reasoning for an answer, folded: "Thought for 5 s · 4 steps". Open it to see how Cue worked it out. */
+@Composable
+private fun ThoughtTrail(steps: List<String>, ms: Long) {
+    var open by remember { mutableStateOf(false) }
+    val accent = Brush.linearGradient(listOf(Color(0xFF7C5CFF), Color(0xFF4FC3F7)))
+    Column(Modifier.padding(start = 44.dp).clip(RoundedCornerShape(18.dp)).background(Color.White.copy(alpha = 0.7f))
+        .border(1.dp, accent, RoundedCornerShape(18.dp)).clickable { open = !open }.padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.AutoAwesome, null, tint = Color(0xFF7C5CFF), modifier = Modifier.size(14.dp)); Spacer(Modifier.width(6.dp))
+            Txt("Thought for ${(ms / 1000.0).let { if (it < 1) "a moment" else "%.0f s".format(it) }} · ${steps.size} steps", Type.tiny, Cue.primaryDeep)
+            Spacer(Modifier.width(4.dp))
+            Txt(if (open) "▴" else "▾", Type.tiny, Cue.muted)
+        }
+        androidx.compose.animation.AnimatedVisibility(open) {
+            Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                steps.forEachIndexed { i, st ->
+                    Row(verticalAlignment = Alignment.Top) {
+                        Box(Modifier.size(18.dp).clip(CircleShape).background(accent), contentAlignment = Alignment.Center) { Txt("${i + 1}", Type.tiny.copy(fontSize = androidx.compose.ui.unit.TextUnit(10f, androidx.compose.ui.unit.TextUnitType.Sp)), Color.White) }
+                        Spacer(Modifier.width(8.dp))
+                        Txt(st, Type.small, Cue.ink, modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** While Cue thinks: what it is looking through, one source at a time, with a moving glow. */
+@Composable
+private fun ThinkingTicker() {
+    val sources = listOf("Reading your question", "Checking your spaces and dates", "Looking at lists and reminders", "Weighing money and people", "Connecting the dots", "Drawing your answer")
+    var at by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(1100); at = (at + 1).coerceAtMost(sources.lastIndex) } }
+    val sweep by androidx.compose.animation.core.rememberInfiniteTransition(label = "think").animateFloat(0f, 1f,
+        androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(1400)), label = "sweep")
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Pixel(PixelMood.Thinking, 40.dp); Spacer(Modifier.width(10.dp))
+        Column(Modifier.clip(RoundedCornerShape(16.dp)).background(Color.White.copy(alpha = 0.8f)).drawBehind {
+            drawRect(Brush.horizontalGradient(listOf(Color.Transparent, Color(0x337C5CFF), Color(0x334FC3F7), Color.Transparent),
+                startX = size.width * (sweep * 1.6f - 0.6f), endX = size.width * (sweep * 1.6f - 0.6f) + size.width * 0.6f))
+        }.padding(horizontal = 14.dp, vertical = 9.dp)) {
+            Txt("Thinking", Type.tiny, Color(0xFF7C5CFF))
+            androidx.compose.animation.AnimatedContent(sources[at], label = "src") { Txt("$it…", Type.small, Cue.ink) }
         }
     }
 }

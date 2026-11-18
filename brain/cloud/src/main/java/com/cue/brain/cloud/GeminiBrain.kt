@@ -94,24 +94,39 @@ class GeminiBrain(private val apiKey: String, private val isOnline: () -> Boolea
      * A typed conversation answered as JSON (Ask Cue's generated screens). [turns] alternate user and model text,
      * oldest first. Text only: nothing here speaks or listens. Null when offline or the call fails.
      */
-    suspend fun chatJson(system: String, turns: List<Pair<String, String>>, model: String = TEXT_MODEL): String? = withContext(Dispatchers.IO) {
+    suspend fun chatJson(system: String, turns: List<Pair<String, String>>, model: String = TEXT_MODEL, thinking: String? = null, timeoutSec: Long = 60): String? = withContext(Dispatchers.IO) {
         if (!isReady()) return@withContext null
         val contents = JSONArray()
         turns.forEach { (role, text) -> contents.put(JSONObject().put("role", role).put("parts", JSONArray().put(JSONObject().put("text", text)))) }
         val body = JSONObject()
             .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system))))
             .put("contents", contents)
-            .put("generationConfig", JSONObject().put("responseMimeType", "application/json").put("temperature", 0.4))
+            .put("generationConfig", JSONObject().put("responseMimeType", "application/json").apply {
+                if (thinking != null) put("thinkingConfig", JSONObject().put("thinkingLevel", thinking)) else put("temperature", 0.4)
+            })
         val req = Request.Builder().url("$REST/models/$model:generateContent").header("x-goog-api-key", apiKey)
             .post(body.toString().toRequestBody("application/json".toMediaType())).build()
         runCatching {
-            slowHttp.newCall(req).execute().use { r ->
+            slowHttp.newBuilder().callTimeout(timeoutSec, TimeUnit.SECONDS).build().newCall(req).execute().use { r ->
                 val s = r.body?.string().orEmpty()
                 if (!r.isSuccessful) { Log.w(TAG, "chatJson ${r.code}: ${s.take(300)}"); return@use null }
                 val parts = JSONObject(s).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts") ?: return@use null
                 (0 until parts.length()).joinToString("") { parts.getJSONObject(it).optString("text") }.trim()
             }
         }.onFailure { Log.w(TAG, "chatJson failed", it) }.getOrNull()
+    }
+
+    /**
+     * A considered answer: the thinking model first (it weighs the user's data before answering), Flash-Lite if that
+     * model is busy or slow, so a reply always comes. Returns the text and which model gave it.
+     */
+    suspend fun thinkJson(system: String, turns: List<Pair<String, String>>): Pair<String, String>? {
+        val t0 = System.currentTimeMillis()
+        chatJson(system, turns, THINK_MODEL, thinking = "low", timeoutSec = 35)?.let { Log.i(TAG, "think: $THINK_MODEL ${System.currentTimeMillis() - t0} ms"); return it to THINK_MODEL }
+        Log.w(TAG, "think model unavailable; falling back to $TEXT_MODEL")
+        chatJson(system, turns, TEXT_MODEL, thinking = "low", timeoutSec = 25)?.let { return it to TEXT_MODEL }
+        // Busy (503) right now: one more model before giving up to the phone's own screens.
+        return chatJson(system, turns, "gemini-3.5-flash-lite", thinking = "low", timeoutSec = 25)?.let { it to "gemini-3.5-flash-lite" }
     }
 
     /** Generated screens can take longer than a one-line answer. */
@@ -122,6 +137,8 @@ class GeminiBrain(private val apiKey: String, private val isOnline: () -> Boolea
     companion object {
         const val LIVE_MODEL = "gemini-3.8-live"
         const val TEXT_MODEL = "gemini-3.1-flash-lite"
+        /** Ask Cue's model: reasons over the user's data before it answers (measured ~5-6 s). */
+        const val THINK_MODEL = "gemini-3-flash-preview"
         const val VOICE = "Aoede"
         private const val REST = "https://generativelanguage.googleapis.com/v1beta"
         internal const val WS = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
@@ -193,7 +210,9 @@ private class LiveSession(
     private fun setup(): JSONObject {
         val system = buildString {
             append(config.rules).append('\n')
-            append("You are on a live phone call, so speak naturally and keep each reply to one or two short sentences. ")
+            append("You are on a live phone call, so speak naturally and keep each reply to one to three short sentences. ")
+            append("The user's screen shows a live panel next to you: whenever the talk is about a list, reminders, habits, people, spaces, papers or the journal, call the matching read tool (list_read, reminders_read, habits_read, people_read, albums_read, papers_read, journal_lookup) so it appears there, and say \"it's on your screen\" instead of reading long lists aloud. ")
+            append("Don't just answer: think one step ahead. If something clashes, is at risk or is still open (an unpacked item before a flight, a reminder that collides, a person waiting on them), say it briefly and offer to handle it. ")
             append("Use the tools to read and change the user's lists, habits, notes, reminders and people; answer questions about their data from the tools, never from memory. ")
             append("Only say something was added, ticked, saved or scheduled after the tool returned ok. ")
             append("Tool results number what they save or list, like #14. When the user corrects something (\"no, from Muskan\", \"I meant tomorrow\"), change that same entry with the matching update tool and its number; never add a second one. ")
