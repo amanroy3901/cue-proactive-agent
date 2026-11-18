@@ -24,6 +24,7 @@ kotlin {
 }
 dependencies {
     api(project(":agent"))
+    implementation(project(":ingest"))
     implementation(project(":ui"))
     implementation(libs.core.ktx)
     implementation(libs.activity.compose)
