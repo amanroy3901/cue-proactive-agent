@@ -119,6 +119,13 @@ class MainActivity : ComponentActivity() {
     /** Ask Cue's conversation and its generated screens; lives as long as the activity. */
     val askSession by lazy { AskSession(this) }
 
+    /** Generated screens (A2UI) for Ask, spaces, Home and calls. */
+    val screens get() = cue.screens
+    private val genBlocks = HashMap<String, GenBlock>()
+    /** One generated block per place, kept while the app is open so going back doesn't ask again. */
+    fun genBlock(key: String, purpose: ScreenMaker.Purpose, albumId: Long?, request: () -> String): GenBlock =
+        genBlocks.getOrPut(key) { GenBlock(this, key, purpose, albumId, request) }
+
     /** Opens one of Cue's screens by route ("lists", "album/12"); generated screens use it. */
     fun openRoute(route: String) { if (route.isNotBlank()) nav.go(route) }
 

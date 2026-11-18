@@ -155,6 +155,8 @@ object CueTools {
         ToolParam("amount", "string", "amount in rupees, like 1200"), ToolParam("what", "string", "what it was for"),
         ToolParam("paid_by", "string", "who paid; empty for the user", required = false), spaceParam))
     val expensesRead = ToolSpec("expenses_read", "Read a space's spending: total, budget left, and who owes whom", listOf(spaceParam))
+    val boardShow = ToolSpec("board_show", "Put a screen on the user's board, beside the call: anything easier to see than hear, like a trip or day plan, a comparison, a budget, a timeline or a summary of their week. Cue draws it in a few seconds", listOf(
+        ToolParam("show", "string", "what to show, in a sentence, like 'a 3-day Goa plan for 13-15 Dec with Riya, ₹30k' or 'cab vs metro to the airport tomorrow'")))
     val itineraryAdd = ToolSpec("itinerary_add", "Add a timed stop or event to a space's itinerary", listOf(
         ToolParam("what", "string", "the stop or event, like 'Check in at Taj'"), ToolParam("when", "string", "day and time, like Saturday 2 pm"),
         ToolParam("place", "string", "where, if said", required = false), spaceParam))
@@ -167,7 +169,7 @@ object CueTools {
         albumSearch, albumsRead, albumOpen, papersRead, renewalsRead, renewalRemind, journalLookup, journalAdd,
         forget, checklistUntick, albumCreate, itemMove, paperRead, practiceSchedule, focusStart, focusStop, focusRead,
         medicinesRead, medicineStop, measureLog, measuresRead, measureSchedule, remember, profileRead, profileForget, followUp, ruleAdd, rulesRead, ruleRemove,
-        spaceCreate, spaceRead, blockAdd, expenseAdd, expensesRead, itineraryAdd, endCall)
+        spaceCreate, spaceRead, blockAdd, expenseAdd, expensesRead, itineraryAdd, boardShow, endCall)
 
     val converse = listOf(checklistAdd, checklistTick, noteSave, reminderSet, eventMove, habitCheckin, doseSchedule, doseTaken,
         pendingAdd, pendingResolve, albumSearch, journalLookup, remember, measureLog, followUp, expenseAdd)
@@ -220,6 +222,8 @@ sealed interface CallCard {
     data object Lists : CallCard
     data object Renewals : CallCard
     data object Focus : CallCard
+    /** A screen Cue designs for the board (a plan, a comparison, a budget), generated in A2UI. */
+    data class Screen(val request: String, val id: Long) : CallCard
 }
 
 /** What a call or a Talk session is about. Tools act relative to it. */
@@ -257,7 +261,7 @@ fun collapseDaily(rs: List<Reminder>): List<Reminder> {
 }
 
 /** Tools that only read: they answer and show a card, but don't count as something the call changed. */
-private val READS = setOf("list_read", "habits_read", "reminders_read", "people_read", "album_search", "journal_lookup", "end_call",
+private val READS = setOf("board_show", "list_read", "habits_read", "reminders_read", "people_read", "album_search", "journal_lookup", "end_call",
     "notes_read", "albums_read", "album_open", "papers_read", "renewals_read", "focus_read", "medicines_read", "measures_read", "profile_read", "rules_read", "space_read", "expenses_read")
 
 private fun num(s: String?): Long = s?.trim()?.removePrefix("#")?.toLongOrNull() ?: -1L
@@ -342,6 +346,11 @@ class CueToolExecutor(
             "reminders_read" -> remindersRead()
             "people_read" -> peopleRead(a["person"].orEmpty())
             "space_create" -> spaceCreate(a)
+            "board_show" -> {
+                val what = a["show"].orEmpty().ifBlank { a.values.firstOrNull().orEmpty() }
+                if (what.isBlank()) ToolResult("board_show", false, "say what to show")
+                else { card = CallCard.Screen(what, System.nanoTime()); ToolResult("board_show", true, "drawing it on their board now; say it's on their board in a moment, and don't read it all aloud") }
+            }
             "space_read" -> spaceRead(a["space"].orEmpty())
             "block_add" -> blockAdd(a["block"].orEmpty(), a["space"].orEmpty())
             "expense_add" -> expenseAdd(a["amount"].orEmpty(), a["what"].orEmpty(), a["paid_by"].orEmpty(), a["space"].orEmpty())

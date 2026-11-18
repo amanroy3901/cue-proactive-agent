@@ -26,6 +26,7 @@ dependencies {
     api(project(":agent"))
     implementation(project(":ingest"))
     implementation(project(":ui"))
+    implementation(project(":genui"))
     implementation(libs.core.ktx)
     implementation(libs.activity.compose)
     implementation(libs.lifecycle.runtime)

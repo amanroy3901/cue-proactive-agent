@@ -119,6 +119,11 @@ fun SpaceScreen(a: MainActivity, nav: Nav, albumId: Long) {
                 Txt(summary, Type.body, modifier = Modifier.weight(1f))
             }
         }
+        // Cue's take on this space, generated (A2UI): the risk, the missing piece, the next step.
+        if (!editing) item(key = "take-${al.id}") {
+            val block = remember(al.id) { a.genBlock("space-${al.id}", ScreenMaker.Purpose.SPACE, al.id) { "Give me your take on my ${al.title}: what matters most right now, what's missing, and what to do next." } }
+            GenBlockView(block, "Cue's take", "Thinking about ${al.title}…")
+        }
         if (editing) item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SoftButton("Rename", color = Color.White.copy(alpha = 0.9f), height = 40.dp) {

@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Autorenew
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
@@ -212,6 +213,7 @@ fun cardLook(c: CallCard): Pair<String, ImageVector> = when (c) {
     CallCard.Albums -> "Spaces" to Icons.Rounded.PhotoLibrary
     CallCard.Renewals -> "Renewals" to Icons.Rounded.Autorenew
     CallCard.Focus -> "Focus" to Icons.Rounded.Timer
+    is CallCard.Screen -> "For you" to Icons.Rounded.AutoAwesome
 }
 
 /**
@@ -300,7 +302,7 @@ fun BoardPeek(card: CallCard?, stamp: Long, isNew: Boolean, onOpen: () -> Unit, 
  * conversation. One tab per card, live: it re-reads the data after every turn, so a tick by voice shows at once.
  */
 @Composable
-fun BoardDrawer(open: Boolean, cards: List<CallCard>, selected: Int, version: Int, onSelect: (Int) -> Unit, onClose: () -> Unit) {
+fun BoardDrawer(open: Boolean, cards: List<CallCard>, selected: Int, version: Int, onSelect: (Int) -> Unit, onClose: () -> Unit, screen: @Composable (CallCard.Screen) -> Unit = {}) {
     AnimatedVisibility(open && cards.isNotEmpty(), enter = fadeIn(tween(200)), exit = fadeOut(tween(200))) {
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)).clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null, onClick = onClose))
     }
@@ -340,7 +342,7 @@ fun BoardDrawer(open: Boolean, cards: List<CallCard>, selected: Int, version: In
                     }
                 }
                 Box(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(androidx.compose.runtime.key(selected) { rememberScrollState() }).padding(horizontal = 8.dp)) {
-                    AnimatedContent(card, transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(120)) }, label = "card") { c -> CallCardView(c, version, dark = true) }
+                    AnimatedContent(card, transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(120)) }, label = "card") { c -> if (c is CallCard.Screen) screen(c) else CallCardView(c, version, dark = true) }
                 }
             }
         }
