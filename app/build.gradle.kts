@@ -25,6 +25,14 @@ android {
 
     buildTypes {
         debug { isDebuggable = true }
+        // A small build to share: debug's behaviour and signing (installs over a debug build), shrunk by R8.
+        create("demo") {
+            initWith(getByName("debug"))
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            matchingFallbacks += listOf("debug")
+        }
     }
 
     compileOptions {
@@ -36,6 +44,8 @@ android {
 
     packaging {
         jniLibs { useLegacyPackaging = true }
+        // Compressed code in the APK: a smaller file to share (installs unpack it once).
+        dex { useLegacyPackaging = true }
         resources { excludes += setOf("META-INF/AL2.0", "META-INF/LGPL2.1", "META-INF/*.kotlin_module") }
     }
 }

@@ -72,6 +72,10 @@ Every row below was run on the device and its log or screenshot checked. "Typed"
 | Barge-in | Cue read a 19 s answer with nobody talking and did not interrupt itself; then "Wait, stop. What time is my flight?" said over an answer stopped the speech and the model within about 0.3 s, and the model answered "Your flight to Delhi is at six PM tomorrow" | Speech played from the Mac |
 | Unit tests | 19 JVM tests for phrase parsing, time parsing, ticket/bill/prescription extraction, people parsing and situation rules, all passing | `./gradlew :agent:test :brain:rules:test` |
 
+## A small build to share (Nov 18)
+
+`./gradlew :app:assembleDemo` builds `app/build/outputs/apk/demo/app-demo.apk`, about 19 MB instead of 88 MB. It behaves like debug (same signing, so it installs over a debug build and keeps the data; shows over the lock screen; debug panel), with R8 code shrinking, unused resources removed and compressed code. Keep rules are in `app/proguard-rules.pro`. The Gemini key is built in, so share it privately only. Tested on the emulator: launch, Ask Cue with a generated screen, the share sheet, a Space.
+
 ## Less friction: one way in for files, planning as a conversation (Nov 18)
 
 - **Inbox** (`agent/Inbox.kt`): every photo, file or shared text, whether it comes from chat, a call or another app's share sheet, is read and filed into the right space by plain rules. In order of weight: what the user typed with it, the space the conversation is about, dates, places and people, then the kind of document. If Cue is sure, it files with Undo; if not, it asks with one-tap choices. A bill filed into a space that tracks money becomes an expense there.
