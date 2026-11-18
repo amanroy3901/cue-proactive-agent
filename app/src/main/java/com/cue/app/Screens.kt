@@ -167,6 +167,20 @@ fun HomeScreen(a: MainActivity, nav: Nav) {
                 RoundIconButton(Icons.Rounded.Tune, "Settings") { nav.go("settings") }
             }
         }
+        // Pinned apps, one tap away.
+        a.pins.mapNotNull { AppCatalog.get(it) }.takeIf { it.isNotEmpty() }?.let { pinned ->
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    pinned.forEach { app ->
+                        Row(Modifier.weight(1f).clip(RoundedCornerShape(18.dp)).background(Color.White.copy(alpha = 0.85f)).clickable(role = Role.Button) { nav.go(app.key) }
+                            .padding(horizontal = 10.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            IconChip(app.icon, app.tint, 28.dp, 15.dp); Spacer(Modifier.width(8.dp))
+                            Txt(app.label, Type.smallStrong, maxLines = 1)
+                        }
+                    }
+                }
+            }
+        }
         item {
             GradientCard(Cue.primaryBrush, Cue.primaryDeep, Modifier.fillMaxWidth(), radius = 32.dp, padding = 22.dp) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -331,11 +345,11 @@ fun AppsScreen(a: MainActivity, nav: Nav, pins: List<String>) {
         a.updatePins(now)
     }
     Page(glowA = Cue.glowLavender, glowB = Cue.glowBlush) {
-        item { Column { Txt("Apps", Type.display); Txt("I run these for you. Pin up to three.", Type.body, Cue.muted) } }
-        item { SectionLabel("Pinned to your bar", "${pins.size} of 3") }
+        item { Column { Txt("Apps", Type.display); Txt("I run these for you. Pin up to three to Home.", Type.body, Cue.muted) } }
+        item { SectionLabel("Pinned to Home", "${pins.size} of 3") }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                pins.mapNotNull { AppCatalog.get(it) }.forEach { app ->
+                pins.mapNotNull { AppCatalog.get(it) }.filter { it in AppCatalog.apps }.forEach { app ->
                     GradientCard(Brush.linearGradient(listOf(app.tint.light, app.tint.deep)), app.tint.deep, Modifier.weight(1f).height(112.dp), radius = 26.dp, padding = 14.dp, onClick = { nav.go(app.key) }) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Icon(app.icon, null, tint = Color.White, modifier = Modifier.size(22.dp))
@@ -350,7 +364,7 @@ fun AppsScreen(a: MainActivity, nav: Nav, pins: List<String>) {
             }
         }
         item { SectionLabel("All apps") }
-        AppCatalog.all.filter { it.key !in pins }.chunked(2).forEach { row ->
+        AppCatalog.apps.filter { it.key !in pins }.chunked(2).forEach { row ->
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     row.forEach { app ->
@@ -408,7 +422,7 @@ fun AlbumsScreen(a: MainActivity, nav: Nav) {
     val items by dao.allItemsFlow().collectAsState(emptyList())
     val t = now()
     Page(glowA = Color(0xFFDCE2FF), glowB = Cue.glowBlush) {
-        item { BackHeader("Spaces", "A page for each thing you're doing", { nav.back() }, glow = Color(0xFF2F3A9E)) }
+        item { Column { Txt("Spaces", Type.display); Txt("A page for each thing you're doing", Type.body, Cue.muted) } }
         item { NewSpaceCard(a, nav) }
         if (albums.isEmpty()) item { EmptyHint("Save a ticket, a prescription or a bill and I'll start a space for it too.") }
         albums.firstOrNull { it.kind == AlbumKind.TRIP }?.let { trip ->

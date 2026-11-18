@@ -60,7 +60,7 @@ object CueCatalog {
             MaterialA2uiBasicCatalogV1Defaults.choicePicker,
             MaterialA2uiBasicCatalogV1Defaults.slider,
             MaterialA2uiBasicCatalogV1Defaults.dateTimeInput,
-        ) + cueComponents,
+        ) + cueComponents + thinkComponents,
         // No browser from a generated screen: links are ignored.
         functions = createBasicCatalogFunctions(urlOpener = { Log.i(TAG, "openUrl ignored: $it") }, messageFormatter = { pattern, _, _ -> pattern }),
     )
@@ -80,6 +80,48 @@ class CueGenUi(private val onAction: (GenAction) -> Unit, private val onError: (
 
     /** The catalog as JSON Schema, for the model's instructions. */
     val schema: String by lazy { runCatching { catalog.toJsonSchemaString() }.getOrElse { Log.w(TAG, "schema", it); "" } }
+
+    /**
+     * The same catalog in a few lines per component (about a fifth of the size): the model answers much faster with
+     * it. Built from [schema], so it never drifts from what the renderer accepts.
+     */
+    val compactSchema: String by lazy { runCatching { compact(JSONObject(schema)) }.getOrElse { Log.w(TAG, "compact schema", it); schema } }
+
+    private fun compact(root: JSONObject): String {
+        val comps = root.getJSONObject("components")
+        val sb = StringBuilder()
+        sb.append("Types: DynamicString = a string, or {\"path\":\"/form/x\"} to read a form field. DynamicNumber/DynamicBoolean likewise. ")
+        sb.append("ComponentId = another component's id. ChildList = array of component ids. Action = {\"event\":{\"name\":\"...\",\"context\":{...}}}. ")
+        sb.append("Any component may set \"weight\" (number) when it sits directly in a Row or Column. * = required.\n")
+        for (name in comps.keys()) {
+            val c = comps.getJSONObject(name)
+            val req = c.optJSONArray("required")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty().toSet()
+            val props = c.optJSONObject("properties") ?: JSONObject()
+            val parts = props.keys().asSequence().filter { it !in setOf("component", "accessibility", "weight", "checks") }
+                .map { k -> k + (if (k in req) "*" else "") + ": " + typeOf(props.getJSONObject(k), 0) }.toList()
+            sb.append("- ").append(name).append(" { ").append(parts.joinToString("; ")).append(" }")
+            c.optString("description").takeIf { it.isNotBlank() }?.let { sb.append(" — ").append(it.take(170)) }
+            sb.append('\n')
+        }
+        return sb.toString()
+    }
+
+    private fun typeOf(p: JSONObject, depth: Int): String {
+        val d = p.optString("description").takeIf { it.isNotBlank() && depth == 0 }?.let { " (" + it.take(90) + ")" }.orEmpty()
+        p.optJSONArray("enum")?.let { e -> return (0 until e.length()).joinToString("|") { e.getString(it) } + d }
+        p.optString("\$ref").takeIf { it.isNotBlank() }?.let { r -> return r.substringAfterLast('/') + d }
+        p.optJSONArray("oneOf")?.let { o -> return (0 until o.length()).joinToString(" or ") { typeOf(o.getJSONObject(it), depth + 1) } + d }
+        if (p.optString("type") == "array") {
+            val items = p.optJSONObject("items")
+            val ip = items?.optJSONObject("properties")
+            val inner = if (ip != null) "{" + ip.keys().asSequence().joinToString(", ") { k -> k + ": " + typeOf(ip.getJSONObject(k), depth + 1) } + "}" else items?.let { typeOf(it, depth + 1) } ?: "any"
+            return "[$inner]$d"
+        }
+        if (p.optString("type") == "object") p.optJSONObject("properties")?.let { op ->
+            return "{" + op.keys().asSequence().joinToString(", ") { k -> k + ": " + typeOf(op.getJSONObject(k), depth + 1) } + "}" + d
+        }
+        return p.optString("type").ifBlank { "any" } + d
+    }
 
     init {
         scope.launch { processor.collectMessages() }
@@ -102,6 +144,14 @@ class CueGenUi(private val onAction: (GenAction) -> Unit, private val onError: (
 
     /** Feeds every message in [messages], forcing [surfaceId] and the protocol version so a sloppy answer still lands. */
     fun feedAll(messages: JSONArray, surfaceId: String) {
+        // A sloppy answer sometimes lists the components themselves instead of A2UI messages: wrap them.
+        val bare = (0 until messages.length()).mapNotNull { messages.optJSONObject(it) }.filter { it.has("component") && it.has("id") }
+        if (bare.isNotEmpty()) {
+            val envelopes = JSONArray()
+            (0 until messages.length()).mapNotNull { messages.optJSONObject(it) }.filter { !it.has("component") }.forEach { envelopes.put(it) }
+            envelopes.put(JSONObject().put("updateComponents", JSONObject().put("components", JSONArray(bare))))
+            return feedAll(envelopes, surfaceId)
+        }
         var created = false
         for (i in 0 until messages.length()) {
             val m = messages.optJSONObject(i) ?: continue

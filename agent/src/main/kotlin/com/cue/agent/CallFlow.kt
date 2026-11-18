@@ -24,6 +24,8 @@ interface DuplexUi {
     fun onInterrupted() {}
     fun onTurnComplete() {}
     fun onCard(card: CallCard) {}
+    /** A tool finished (the call may have changed something). */
+    fun onTool(name: String) {}
     /** The model said goodbye and asked to hang up. */
     fun onEndRequested() {}
     fun onClosed(reason: String?) {}
@@ -104,7 +106,8 @@ class CallFlow internal constructor(
     }
 
     private fun rules(kind: String): String = buildString {
-        append("You are Cue, a warm phone assistant on a call. Reply in one or two short sentences. ")
+        append("You are Cue, a warm, sharp personal assistant on a call. Reply in one to three short sentences. ")
+        append("Think before you answer: connect what you know about the user (their spaces, dates, lists, money, people, habits in the context) and add the one thing they need but didn't ask for, like a clash, a risk or the next step. Be specific with their real names, times and numbers. ")
         append("Use tools to save lists, notes and reminders the user mentions. Never invent facts that are not in the context. ")
         append(WORKFLOW_RULES)
         if (kind == ReminderKind.PRACTICE) append("This is English speaking practice: keep the conversation going and gently correct one mistake per turn. ")
@@ -200,6 +203,7 @@ class CallFlow internal constructor(
                 val r = executor.execute(call)
                 if (r.ok) turnActs++
                 executor.card?.let { ui.onCard(it) }
+                ui.onTool(call.name)
                 if (call.name == "end_call") ui.onEndRequested()
                 engine.log("live tool ${call.name} ${call.args} -> ${r.ok} ${r.message}")
                 return r
