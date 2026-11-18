@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Autorenew
 import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
@@ -49,6 +50,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -157,27 +161,6 @@ fun StageReadout(state: String, seconds: Int, brain: String, live: Boolean) {
     }
 }
 
-/**
- * The conversation as captions: the line before, small and dim; the line now, large, following the voice word by
- * word. What the user is still saying shows live with a cursor.
- */
-@Composable
-fun Captions(previous: Line?, current: Line?, partial: String, modifier: Modifier = Modifier, compact: Boolean = false) {
-    Column(modifier.fillMaxWidth().padding(horizontal = 28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        val showPrev = previous != null && previous.text.isNotBlank() && partial.isBlank()
-        if (showPrev) Txt((if (previous!!.who == "user") "You  ·  " else "") + previous.text, Type.small, Stage.dim, maxLines = 2, modifier = Modifier.fillMaxWidth())
-        if (partial.isNotBlank()) {
-            Text(partial + " ▍", style = (if (compact) Type.body else Type.lead).copy(color = Stage.text.copy(alpha = 0.75f)), maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
-        } else if (current != null && current.text.isNotBlank()) {
-            AnimatedContent(current, transitionSpec = { (fadeIn(tween(250)) + slideInVertically { it / 3 }) togetherWith fadeOut(tween(150)) }, label = "cap") { l ->
-                val style = if (l.who == "user") Type.body.copy(color = Stage.dim) else (if (compact) Type.lead else Type.title.copy(fontWeight = FontWeight(700), fontSize = TextUnit(23f, TextUnitType.Sp), lineHeight = TextUnit(30f, TextUnitType.Sp)))
-                val txt = if (l.who == "user") AnnotatedString("You  ·  " + l.text) else if (l.spoken >= 0) karaoke(l.text, l.spoken) else AnnotatedString(l.text)
-                Text(txt, style = style.copy(color = if (l.who == "user") Stage.dim else Stage.text), maxLines = if (compact) 3 else 5, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
-            }
-        }
-    }
-}
-
 private fun karaoke(text: String, spoken: Int): AnnotatedString {
     val at = spoken.coerceIn(0, text.length)
     val wordEnd = text.indexOf(' ', at).let { if (it < 0) text.length else it }
@@ -232,51 +215,132 @@ fun cardLook(c: CallCard): Pair<String, ImageVector> = when (c) {
 }
 
 /**
- * Everything Cue has put on screen this call, in a glass panel of its own: one tab per card, the newest in front,
- * live (it reloads after every turn, so a tick by voice shows up at once). Folds down to a single line.
+ * The conversation over Cue, the way a voice assistant shows it: the newest line at the bottom, large; older lines
+ * drift up and fade out. Cue's line follows the voice word by word; what the user is still saying shows with a cursor.
  */
 @Composable
-fun LivePanel(cards: List<CallCard>, selected: Int, open: Boolean, version: Int, onSelect: (Int) -> Unit, onToggle: () -> Unit, modifier: Modifier = Modifier) {
-    val card = cards.getOrNull(selected) ?: return
-    val glow = remember { androidx.compose.animation.core.Animatable(0f) }
-    LaunchedEffect(version) { glow.snapTo(1f); glow.animateTo(0f, tween(1400)) }
-    val flash = glow.value
-    val pulse by rememberInfiniteTransition(label = "live").animateFloat(0.3f, 1f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "p")
-    Column(
-        modifier.fillMaxWidth().padding(horizontal = 12.dp).clip(RoundedCornerShape(28.dp)).background(Color(0xFF15122E).copy(alpha = 0.78f))
-            .border(1.dp, Brush.linearGradient(listOf(Stage.violet.copy(alpha = 0.35f + 0.3f * flash), Stage.cyan.copy(alpha = 0.15f + 0.3f * flash), Color.White.copy(alpha = 0.05f))), RoundedCornerShape(28.dp))
-            .padding(top = 10.dp, bottom = if (open) 6.dp else 10.dp),
+fun ConversationOverlay(lines: List<Line>, partial: String, modifier: Modifier = Modifier, maxHeight: Dp = 300.dp) {
+    val shown = lines.takeLast(5)
+    Box(
+        modifier.fillMaxWidth().heightIn(max = maxHeight).clipToBounds()
+            .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                drawRect(Brush.verticalGradient(0f to Color.Transparent, 0.3f to Color.Black), blendMode = androidx.compose.ui.graphics.BlendMode.DstIn)
+            },
+        contentAlignment = Alignment.BottomCenter,
     ) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                cards.forEachIndexed { i, c ->
-                    val (label, icon) = cardLook(c)
-                    val sel = i == selected
-                    Row(
-                        Modifier.clip(CircleShape).background(if (sel) Color.White.copy(alpha = 0.14f) else Color.Transparent)
-                            .clickable(role = Role.Tab) { onSelect(i) }.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(icon, null, tint = if (sel) Stage.cyan else Stage.dim, modifier = Modifier.size(15.dp))
-                        Spacer(Modifier.width(5.dp))
-                        Txt(label, Type.smallStrong, if (sel) Stage.text else Stage.dim, maxLines = 1)
+        Column(Modifier.fillMaxWidth().wrapContentHeight(Alignment.Bottom, unbounded = true).padding(horizontal = 26.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            val total = shown.size + if (partial.isNotBlank()) 1 else 0
+            shown.forEachIndexed { i, l ->
+                val age = total - 1 - i
+                androidx.compose.runtime.key(l) {
+                    var seen by remember { mutableStateOf(false) }
+                    LaunchedEffect(Unit) { seen = true }
+                    AnimatedVisibility(seen, enter = fadeIn(tween(300)) + slideInVertically(tween(300)) { it / 2 }) {
+                        OverlayLine(l, (if (age == 0) 1f else if (age == 1) 0.8f else 0.5f))
                     }
                 }
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(6.dp).clip(CircleShape).background(Stage.cyan.copy(alpha = pulse)))
-                Spacer(Modifier.width(5.dp))
-                Txt("LIVE", Stage.caps, Stage.cyan)
-            }
-            Spacer(Modifier.width(6.dp))
-            Box(Modifier.size(32.dp).clip(CircleShape).clickable(role = Role.Button, onClickLabel = if (open) "Fold the panel" else "Open the panel", onClick = onToggle), contentAlignment = Alignment.Center) {
-                Icon(if (open) Icons.Rounded.KeyboardArrowDown else Icons.Rounded.KeyboardArrowUp, null, tint = Stage.text, modifier = Modifier.size(22.dp))
+            if (partial.isNotBlank()) Text("$partial ▍", style = Type.lead.copy(color = Stage.text.copy(alpha = 0.7f)), modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+        }
+    }
+}
+
+@Composable
+private fun OverlayLine(l: Line, alpha: Float) {
+    if (l.who == "user") {
+        Text(l.text, style = Type.lead.copy(color = Stage.dim.copy(alpha = alpha), fontWeight = FontWeight(600)), modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+    } else {
+        val style = Type.title.copy(fontWeight = FontWeight(700), fontSize = TextUnit(22f, TextUnitType.Sp), lineHeight = TextUnit(29f, TextUnitType.Sp), color = Stage.text.copy(alpha = alpha))
+        Text(if (l.spoken >= 0) karaoke(l.text, l.spoken) else AnnotatedString(l.text), style = style, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+/**
+ * The board's handle on the right edge: one glass button per card Cue has put up this call. The one that just
+ * changed pulses. Tap to open the board.
+ */
+@Composable
+fun BoardRail(cards: List<CallCard>, updated: Int, stamp: Long, onOpen: (Int) -> Unit, modifier: Modifier = Modifier) {
+    val pulse by rememberInfiniteTransition(label = "rail").animateFloat(0.25f, 1f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "p")
+    var fresh by remember { mutableStateOf(false) }
+    LaunchedEffect(stamp) { fresh = true; kotlinx.coroutines.delay(5000); fresh = false }
+    Column(modifier.clip(RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp)).background(Color(0xFF15122E).copy(alpha = 0.72f))
+        .border(1.dp, Stage.glassEdge, RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp)).padding(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        cards.forEachIndexed { i, c ->
+            val (label, icon) = cardLook(c)
+            val hot = fresh && i == updated
+            Box(Modifier.size(46.dp).clip(CircleShape).background(if (hot) Stage.accent else Brush.linearGradient(listOf(Stage.glass, Stage.glass)))
+                .clickable(role = Role.Button, onClickLabel = "Open $label") { onOpen(i) }, contentAlignment = Alignment.Center) {
+                Icon(icon, label, tint = Color.White, modifier = Modifier.size(20.dp))
+                if (hot) Box(Modifier.align(Alignment.TopEnd).padding(6.dp).size(8.dp).clip(CircleShape).background(Color.White.copy(alpha = pulse)))
             }
         }
-        AnimatedVisibility(open, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
-            Box(Modifier.fillMaxWidth().heightIn(max = 330.dp).verticalScroll(androidx.compose.runtime.key(selected) { rememberScrollState() }).padding(horizontal = 6.dp)) {
-                AnimatedContent(selected to card, transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(120)) }, label = "card") { (_, c) ->
-                    CallCardView(c, version, dark = true)
+    }
+}
+
+/** A small note beside the rail when a card changes while the board is closed: "List · updated". */
+@Composable
+fun BoardPeek(card: CallCard?, stamp: Long, isNew: Boolean, onOpen: () -> Unit, modifier: Modifier = Modifier) {
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(stamp) { if (card != null && stamp > 0) { shown = true; kotlinx.coroutines.delay(4500); shown = false } }
+    AnimatedVisibility(shown && card != null, modifier = modifier, enter = fadeIn() + androidx.compose.animation.slideInHorizontally { it / 2 }, exit = fadeOut()) {
+        val (label, icon) = cardLook(card!!)
+        Row(Modifier.clip(CircleShape).background(Color(0xFF15122E).copy(alpha = 0.85f)).border(1.dp, Stage.accent, CircleShape).clickable(onClick = onOpen)
+            .padding(start = 10.dp, end = 14.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, null, tint = Stage.cyan, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(6.dp))
+            Txt(if (isNew) "$label on your board" else "$label updated", Type.smallStrong, Stage.text, maxLines = 1)
+        }
+    }
+}
+
+/**
+ * The board: everything Cue has put up this call, in its own sheet that slides over from the right, apart from the
+ * conversation. One tab per card, live: it re-reads the data after every turn, so a tick by voice shows at once.
+ */
+@Composable
+fun BoardDrawer(open: Boolean, cards: List<CallCard>, selected: Int, version: Int, onSelect: (Int) -> Unit, onClose: () -> Unit) {
+    AnimatedVisibility(open && cards.isNotEmpty(), enter = fadeIn(tween(200)), exit = fadeOut(tween(200))) {
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)).clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null, onClick = onClose))
+    }
+    AnimatedVisibility(open && cards.isNotEmpty(), modifier = Modifier.fillMaxSize(),
+        enter = androidx.compose.animation.slideInHorizontally(tween(320)) { it } + fadeIn(), exit = androidx.compose.animation.slideOutHorizontally(tween(260)) { it } + fadeOut()) {
+        val card = cards.getOrNull(selected.coerceIn(0, (cards.size - 1).coerceAtLeast(0))) ?: return@AnimatedVisibility
+        val glow = remember { androidx.compose.animation.core.Animatable(0f) }
+        LaunchedEffect(version) { glow.snapTo(1f); glow.animateTo(0f, tween(1400)) }
+        val pulse by rememberInfiniteTransition(label = "live").animateFloat(0.3f, 1f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "p")
+        Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(top = 64.dp, bottom = 96.dp), contentAlignment = Alignment.TopEnd) {
+            Column(
+                Modifier.fillMaxWidth(0.9f).wrapContentHeight().clip(RoundedCornerShape(topStart = 30.dp, bottomStart = 30.dp)).background(Brush.verticalGradient(listOf(Color(0xFF1A1638), Color(0xFF110E26))))
+                    .border(1.dp, Brush.linearGradient(listOf(Stage.violet.copy(alpha = 0.4f + 0.4f * glow.value), Stage.cyan.copy(alpha = 0.15f + 0.4f * glow.value), Color.White.copy(alpha = 0.05f))),
+                        RoundedCornerShape(topStart = 30.dp, bottomStart = 30.dp))
+                    .clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) {}
+                    .padding(top = 14.dp, bottom = 10.dp),
+            ) {
+                Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Txt("BOARD", Stage.caps, Stage.dim)
+                    Spacer(Modifier.width(10.dp))
+                    Box(Modifier.size(6.dp).clip(CircleShape).background(Stage.cyan.copy(alpha = pulse)))
+                    Spacer(Modifier.width(5.dp))
+                    Txt("LIVE", Stage.caps, Stage.cyan, modifier = Modifier.weight(1f))
+                    Box(Modifier.size(40.dp).clip(CircleShape).clickable(role = Role.Button, onClickLabel = "Close the board", onClick = onClose), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Rounded.Close, "Close", tint = Stage.text, modifier = Modifier.size(22.dp))
+                    }
+                }
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    cards.forEachIndexed { i, c ->
+                        val (label, icon) = cardLook(c)
+                        val sel = c == card
+                        Row(Modifier.clip(CircleShape).background(if (sel) Color.White.copy(alpha = 0.14f) else Color.Transparent).clickable(role = Role.Tab) { onSelect(i) }
+                            .padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(icon, null, tint = if (sel) Stage.cyan else Stage.dim, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(5.dp))
+                            Txt(label, Type.smallStrong, if (sel) Stage.text else Stage.dim, maxLines = 1)
+                        }
+                    }
+                }
+                Box(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(androidx.compose.runtime.key(selected) { rememberScrollState() }).padding(horizontal = 8.dp)) {
+                    AnimatedContent(card, transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(120)) }, label = "card") { c -> CallCardView(c, version, dark = true) }
                 }
             }
         }

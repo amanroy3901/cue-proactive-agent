@@ -128,6 +128,12 @@ Results show in the chat as screens Cue composes from its own components. Calls 
   - Spaces and Apps tabs
 - **Not yet tested on the razr:** real voice on the new stage.
 
+- **Call layout, second pass (same day).**
+  - Pixel now always fills the screen. Nothing shrinks it.
+  - The conversation floats over it like a voice-assistant overlay: the newest line at the bottom, large; older lines fade upward.
+  - Cards no longer sit in the conversation. They live on a **board**: a rail of buttons on the right edge (one per card, pulsing when it changes). A note says "List on your board" or "List updated". Tap to slide the board in from the right; it stays live.
+  - Stray Greek or Cyrillic in Cue's transcript is filtered out.
+
 ## Not verified, and why
 
 - **Real speech (partly).** Since the Nov 13 morning fix, calls on LFM3 hear the user's own voice. Verified with speech played from the Mac and with Aman talking on live calls: the model transcribed "Can you add a haircut in the list?" and "Call me at 11pm every day." and both actions ran. "Aadhaar card" was heard as "other arcade" / "adha card", so Indian words can be misheard.
