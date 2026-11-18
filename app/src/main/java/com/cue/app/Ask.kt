@@ -57,6 +57,7 @@ import com.cue.ui.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -103,6 +104,10 @@ class AskSession(private val a: MainActivity) {
     /** A plan being talked through: the goal, the questions, the answers so far. */
     private class PlanRun(val goal: String, val questions: List<PlanQuestion>, val answers: MutableList<Pair<PlanQuestion, String>> = mutableListOf(), var index: Int = 0)
     private var plan: PlanRun? = null
+        set(v) { field = v; planning = v != null }
+    /** A plan is being talked through (questions or a preview waiting): the demo waits for it. */
+    var planning by mutableStateOf(false)
+        private set
 
     init { restore() }
 
@@ -260,6 +265,11 @@ class AskSession(private val a: MainActivity) {
             plan = null
             contextAlbum = id
             turns[turnIndex] = t.copy(preview = null, text = "Made ${s.title}: ${s.describe()}.", openAlbum = id)
+            val list = withContext(Dispatchers.IO) { a.cue.engine.dao.checklistsInAlbum(id).firstOrNull() }
+            screen("Here it is:",
+                c("root", "Column", "children" to JSONArray(listOfNotNull("space", list?.let { "list" }))),
+                c("space", "CueSpace", "spaceId" to id),
+                *listOfNotNull(list?.let { c("list", "CueList", "listId" to it.id, "showDone" to false) }).toTypedArray())
             turns += AskTurn(false, "Send me photos, bills or tickets for it here, or tell me what to add.", note = true)
             save()
         }
@@ -271,6 +281,171 @@ class AskSession(private val a: MainActivity) {
         turns[turnIndex] = t.copy(preview = null, text = "Okay, I didn't make it.")
         save()
     }
+
+    // ------------------------------------------------------------------ the guided demo
+
+    /** One step of the demo: the button's label, and what pressing it does, all inside this conversation. */
+    class TourStep(val label: String, val run: suspend () -> Unit)
+
+    /** The step the demo's button runs next; -1 when no demo is running. */
+    var tourAt by mutableStateOf(-1)
+        private set
+    private var tourTrip: Long? = null
+    val tourNext: TourStep? get() = if (planning) null else tourSteps.getOrNull(tourAt)
+    val tourCount: Int get() = tourSteps.size
+
+    private fun c(id: String, type: String, vararg p: Pair<String, Any>) = JSONObject().put("id", id).put("component", type).apply { p.forEach { (k, v) -> put(k, v) } }
+
+    /** A screen Cue composes itself from its own components (no model needed), shown as Cue's turn. */
+    private fun screen(say: String, vararg comps: JSONObject) {
+        val id = "t${++count}"
+        val arr = JSONArray(); comps.forEach { arr.put(it) }
+        genUi.feedAll(JSONArray().put(JSONObject().put("updateComponents", JSONObject().put("components", arr))), id)
+        turns += AskTurn(false, say, id)
+        save()
+    }
+
+    private fun tip(text: String) { turns += AskTurn(false, "▶ $text", note = true); save() }
+
+    private suspend fun moneyScreen(albumId: Long) {
+        val dao = a.cue.engine.dao
+        val b = dao.blocks(albumId).firstOrNull { it.type == BlockType.EXPENSES } ?: return
+        val ex = Spaces.expenses(dao.records(b.id))
+        val total = ex.sumOf { it.amount }
+        val owe = Spaces.settle(ex, Spaces.people(b)).firstOrNull()
+        screen("The trip's money, kept for you:",
+            c("root", "Row", "children" to JSONArray(listOfNotNull("spent", owe?.let { "owe" }))),
+            c("spent", "CueStat", "label" to "Spent", "value" to "₹${Spaces.money(total)}", "caption" to (Spaces.budget(b)?.let { "of ₹${Spaces.money(it)} budget" } ?: "")),
+            c("owe", "CueStat", "label" to "Split", "value" to (owe?.substringAfterLast(' ') ?: ""), "caption" to (owe ?: "")))
+    }
+
+    private suspend fun fileDemo(path: String, name: String, hint: String = "") {
+        turns += AskTurn(true, hint, files = listOf(path))
+        fileAll(hint, listOf(Attachment(path, name, photo = true)))
+    }
+
+    private suspend fun tourAsk(text: String, plan: Boolean = false) {
+        turns += AskTurn(true, text)
+        if (plan) startPlan(text) else answer()
+    }
+
+    private val tourSteps: List<TourStep> = listOf(
+        TourStep("Cue rings: morning call") {
+            tip("Answer the call. Say \"I've packed the passport\", then \"remind me at 9 to call Mom\". Talk over Cue to interrupt it. Say \"bye\" to hang up.")
+            delay(1500)
+            Demo.ringNow(a.cue.engine, ReminderKind.CHECKIN_MORNING)
+        },
+        TourStep("See what the call changed") {
+            val dao = a.cue.engine.dao
+            val list = tourTrip?.let { t -> dao.itemsInAlbum(t).firstOrNull { it.type == ItemType.CHECKLIST && it.title == "To pack" } }
+            screen("Here's what the call did, live:",
+                c("root", "Column", "children" to JSONArray(listOfNotNull(list?.let { "list" }, "rem"))),
+                *listOfNotNull(list?.let { c("list", "CueList", "listId" to it.id, "showDone" to true) }).toTypedArray(),
+                c("rem", "CueReminders", "limit" to 3))
+        },
+        TourStep("Send Cue a dinner bill") {
+            val path = Demo.drawPicture(a, "bill", listOf("KARIM'S", "Jama Masjid, Delhi", "Tax Invoice", "2 x Mutton korma   980", "4 x Roti           160", "2 x Phirni         300",
+                "GST                400", "Total Rs 1,840.00", "Thank you!"))
+            fileDemo(path, "karims-bill.jpg")
+            tourTrip?.let { moneyScreen(it) }
+            tip("One photo: Cue read it, put it in the Delhi trip, and split it with Riya. Undo and Move are right there.")
+        },
+        TourStep("Ask: what's left to pack?") {
+            tourAsk("What's left to pack for Delhi?")
+        },
+        TourStep("Plan my sister's wedding") {
+            tourAsk("I'm planning my sister's wedding", plan = true)
+            tip("Tap an answer to each question, then Make it. The demo carries on after that.")
+        },
+        TourStep("Send a photo for the wedding") {
+            fileDemo(Demo.drawPicture(a, "venue"), "venue.jpg")
+            tip("No note needed: the chat is about the wedding, so the photo went there.")
+        },
+        TourStep("Arrive at the airport") {
+            val engine = a.cue.engine
+            val place = engine.dao.places().firstOrNull { it.kind == PlaceKind.AIRPORT }
+            val spec = place?.let { engine.bubbleForPlace(it) }
+            tip("At the airport Cue pops a bubble by itself: boarding pass and anything still unpacked. Tap outside it to close.")
+            delay(800)
+            a.bubblePreview = spec
+        },
+        TourStep("Rahul messages on WhatsApp") {
+            val engine = a.cue.engine
+            engine.onNotification("com.whatsapp", "Rahul", "Can you send the deck before tomorrow?")
+            val p = engine.person("Rahul")
+            val open = engine.dao.openPending(p.id)
+            tip("Rahul just messaged. Cue remembers what you owe him and shows it before you reply.")
+            delay(800)
+            a.bubblePreview = BubbleSpec("WhatsApp", "Rahul messaged. Still open with Rahul", null, open.map { BubbleItem(it.id, it.text, "pending") }, personId = p.id)
+        },
+        TourStep("Medicine reminder rings") {
+            tip("Answer and say \"yes I took it\".")
+            delay(1200)
+            Demo.ringNow(a.cue.engine, ReminderKind.DOSE)
+        },
+        TourStep("Night call: talk about your day") {
+            tip("Answer and say \"Pack the adapter. The cab is at 3:30. Today was a good day.\" Then say bye: Cue files the task, the note and the journal.")
+            delay(1500)
+            Demo.ringNow(a.cue.engine, ReminderKind.CHECKIN_NIGHT)
+        },
+        TourStep("What do you know about me?") {
+            tourAsk("What do you know about me, and what's coming up this week?")
+            val engine = a.cue.engine
+            val dao = engine.dao
+            val spaces = dao.albums().filter { !it.autoCreated || it.id == tourTrip }.take(2)
+            val openTodos = dao.openEntries().size
+            val rahul = dao.allOpenPending().firstOrNull()?.personId
+            screen("Your week at a glance, all from what you told me or handed me:",
+                c("root", "Column", "children" to JSONArray(listOfNotNull("stats") + spaces.indices.map { "sp$it" } + listOfNotNull(rahul?.let { "person" }, "rem"))),
+                c("stats", "Row", "children" to JSONArray(listOf("s1", "s2"))),
+                c("s1", "CueStat", "label" to "Spaces", "value" to "${dao.albums().size}", "caption" to "trips, health, plans"),
+                c("s2", "CueStat", "label" to "To do", "value" to "$openTodos", "caption" to "open items"),
+                *spaces.mapIndexed { i, al -> c("sp$i", "CueSpace", "spaceId" to al.id) }.toTypedArray(),
+                *listOfNotNull(rahul?.let { c("person", "CuePerson", "personId" to it) }).toTypedArray(),
+                c("rem", "CueReminders", "limit" to 3))
+        },
+        TourStep("Finish") {
+            turns += AskTurn(false, "That's Cue. It remembers your life, files whatever you hand it, plans with you, and rings when it matters.")
+            save()
+            tourAt = -1
+        },
+    )
+
+    /** Starts the demo here: demo data, the Delhi trip as a full space, and a first screen of the week. */
+    fun startTour() {
+        if (thinking) return
+        scope.launch {
+            clear()
+            thinking = true
+            val engine = a.cue.engine
+            val trip = withContext(Dispatchers.IO) { Demo.prepareTour(engine) }
+            tourTrip = trip
+            contextAlbum = trip
+            thinking = false
+            val ticket = engine.dao.itemByHash("demo-ticket")
+            val gym = engine.dao.habitByName("Gym")
+            screen("Hi! Here's your week. I put it together from a boarding pass, a hotel email, a prescription and our calls.",
+                c("root", "Column", "children" to JSONArray(listOfNotNull("stats", trip?.let { "space" }, "rem"))),
+                c("stats", "Row", "children" to JSONArray(listOfNotNull(ticket?.let { "flight" }, gym?.let { "gym" }))),
+                *listOfNotNull(
+                    ticket?.let { c("flight", "CueStat", "label" to "Flight", "value" to (it.eventStart?.let { t -> TextKit.dayLabel(t, System.currentTimeMillis(), zone) } ?: "Soon"), "caption" to "to Delhi, 6 PM") },
+                    gym?.let { c("gym", "CueStat", "label" to "Gym streak", "value" to "${engine.streak(it.id)} days", "caption" to "keep it going") },
+                    trip?.let { c("space", "CueSpace", "spaceId" to it) },
+                ).toTypedArray(),
+                c("rem", "CueReminders", "limit" to 3))
+            tip("Every card here is live data, drawn by Cue as a generated screen. Press the button below for each next step.")
+            tourAt = 0
+        }
+    }
+
+    fun nextTour() {
+        val step = tourNext ?: return
+        if (thinking) return
+        tourAt++
+        scope.launch { runCatching { step.run() }.onFailure { Log.w("CueTour", "step failed", it); thinking = false } }
+    }
+
+    fun endTour() { tourAt = -1 }
 
     // ------------------------------------------------------------------ history
 
@@ -296,7 +471,7 @@ class AskSession(private val a: MainActivity) {
     }
 
     fun clear() {
-        turns.clear(); plan = null; contextAlbum = null
+        turns.clear(); plan = null; contextAlbum = null; tourAt = -1
         prefs.edit().clear().apply()
     }
 
@@ -496,6 +671,7 @@ fun AskScreen(a: MainActivity, nav: Nav) {
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.weight(1f)) { BackHeader("Ask Cue", "Type, or tap + to add photos and files.", { nav.back() }) }
+                        if (session.tourAt < 0) Txt("▶ Demo", Type.smallStrong, Cue.primaryDeep, modifier = Modifier.clip(CircleShape).clickable { session.startTour() }.padding(10.dp))
                         if (session.turns.isNotEmpty()) Txt("Clear", Type.small, Cue.muted, modifier = Modifier.clip(CircleShape).clickable { session.clear() }.padding(10.dp))
                     }
                 }
@@ -505,6 +681,7 @@ fun AskScreen(a: MainActivity, nav: Nav) {
                             Pixel(PixelMood.Idle, 72.dp); Spacer(Modifier.width(10.dp))
                             Txt("Ask about your day, or tell me what you're planning. Send a bill, ticket or photo and I'll put it in the right space.", Type.body, Cue.muted)
                         }
+                        PrimaryButton("▶ Run the full demo", Modifier.fillMaxWidth(), height = 52.dp) { session.startTour() }
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             listOf("I'm planning a trip", "I'm organising a party", "Help me plan a move", "What's my day look like?", "What's left to pack?", "What do I owe people?").forEach { s ->
                                 Txt(s, Type.smallStrong, Cue.primaryDeep, modifier = Modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.9f)).clickable { send(s) }.padding(horizontal = 14.dp, vertical = 9.dp))
@@ -539,6 +716,18 @@ fun AskScreen(a: MainActivity, nav: Nav) {
                     }
                 }
                 if (session.thinking) item { Row(verticalAlignment = Alignment.CenterVertically) { Pixel(PixelMood.Idle, 40.dp); Spacer(Modifier.width(8.dp)); Txt("Working on it…", Type.small, Cue.muted) } }
+            }
+            session.tourNext?.let { step ->
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 6.dp).clip(RoundedCornerShape(22.dp)).background(Cue.primaryBrush)
+                    .padding(start = 16.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Txt("Demo · next ${session.tourAt + 1} of ${session.tourCount}", Type.tiny, Color.White.copy(alpha = 0.8f))
+                        Txt(step.label, Type.bodyStrong, Color.White, maxLines = 2)
+                    }
+                    Txt("End", Type.smallStrong, Color.White.copy(alpha = 0.8f), modifier = Modifier.clip(CircleShape).clickable { session.endTour() }.padding(10.dp))
+                    Box(Modifier.size(48.dp).clip(CircleShape).background(Color.White).clickable(role = Role.Button, onClickLabel = step.label) { focus.clearFocus(); session.nextTour() },
+                        contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Rounded.Send, step.label, tint = Cue.primaryDeep, modifier = Modifier.size(20.dp)) }
+                }
             }
             if (session.pending.isNotEmpty()) Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 session.pending.toList().forEach { at ->

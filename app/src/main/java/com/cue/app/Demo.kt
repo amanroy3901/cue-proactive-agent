@@ -43,24 +43,24 @@ object Demo {
         val now = engine.clock.now()
         val zone = engine.clock.zone
         engine.ensureDefaults()
-        if (dao.albums().any { it.kind == AlbumKind.TRIP }) { engine.log("demo data already loaded; wipe first to reload"); return }
+        if (dao.itemByHash("demo-ticket") != null) { engine.log("demo data already loaded; wipe first to reload"); return }
         // Travel.
-        val ticket = engine.ingestDocument(ticketText(engine), null, "screenshot", "demo-ticket")
+        val ticket = engine.ingestDocument(ticketText(engine), null, "screenshot", "demo-ticket", quiet = true)
         val albumId = ticket?.albumId
         val listId = dao.insertItem(Item(type = ItemType.CHECKLIST, title = "To pack", albumId = albumId, source = "call", createdAt = now))
         listOf("Charger" to true, "Passport" to false, "Earphones" to false).forEachIndexed { i, (t, c) ->
             dao.insertEntry(ChecklistEntry(itemId = listId, text = t, checked = c, position = i))
         }
         dao.insertItem(Item(type = ItemType.NOTE, title = "Hotel is near Connaught Place", body = "Hotel is near Connaught Place", albumId = albumId, source = "call", createdAt = now))
-        engine.ingestDocument("The Lalit New Delhi\nHotel booking confirmation\nCheck-in ${dateText(now + 86_400_000L, engine)}\nBarakhamba Avenue, Connaught Place", null, "share", "demo-hotel")
+        engine.ingestDocument("The Lalit New Delhi\nHotel booking confirmation\nCheck-in ${dateText(now + 86_400_000L, engine)}\nBarakhamba Avenue, Connaught Place", null, "share", "demo-hotel", quiet = true)
         // Health.
-        engine.ingestDocument("Rao Family Clinic\nDr. Suresh Rao\nPatient: Aman\nRx\nTab Amoxicillin 500 mg twice a day for 5 days\nDate: ${dateText(now - 3 * 86_400_000L, engine)}", null, "share", "demo-rx")
-        engine.ingestDocument("City Diagnostics\nLab report\nRef: Dr. Suresh Rao\nPatient: Aman\nHaemoglobin 14.1 g/dL\nCBC normal\nDate: ${dateText(now - 3 * 86_400_000L, engine)}", null, "share", "demo-lab")
+        engine.ingestDocument("Rao Family Clinic\nDr. Suresh Rao\nPatient: Aman\nRx\nTab Amoxicillin 500 mg twice a day for 5 days\nDate: ${dateText(now - 3 * 86_400_000L, engine)}", null, "share", "demo-rx", quiet = true)
+        engine.ingestDocument("City Diagnostics\nLab report\nRef: Dr. Suresh Rao\nPatient: Aman\nHaemoglobin 14.1 g/dL\nCBC normal\nDate: ${dateText(now - 3 * 86_400_000L, engine)}", null, "share", "demo-lab", quiet = true)
         // Life admin.
         val bought = now - 340L * 86_400_000L
-        engine.ingestDocument("Cool Air Electronics\nTax Invoice\nItem: LG 1.5 Ton Split Air Conditioner\nAmount: Rs 42,990\nDate: ${dateText(bought, engine)}\n1 year comprehensive warranty", null, "share", "demo-ac")
-        engine.ingestDocument("BESCOM electricity bill\nAmount Rs 1,240\nDue date: ${dateText(now + 3 * 86_400_000L, engine)}", null, "share", "demo-electricity")
-        engine.ingestDocument("Third Wave Coffee\nIndiranagar 12th Main\nCold brew 260\nAvocado toast 340", null, "screenshot", "demo-cafe")
+        engine.ingestDocument("Cool Air Electronics\nTax Invoice\nItem: LG 1.5 Ton Split Air Conditioner\nAmount: Rs 42,990\nDate: ${dateText(bought, engine)}\n1 year comprehensive warranty", null, "share", "demo-ac", quiet = true)
+        engine.ingestDocument("BESCOM electricity bill\nAmount Rs 1,240\nDue date: ${dateText(now + 3 * 86_400_000L, engine)}", null, "share", "demo-electricity", quiet = true)
+        engine.ingestDocument("Third Wave Coffee\nIndiranagar 12th Main\nCold brew 260\nAvocado toast 340", null, "screenshot", "demo-cafe", quiet = true)
         // People memory.
         val rahul = engine.person("Rahul")
         if (dao.openPending(rahul.id).isEmpty()) dao.insertPending(PendingItem(personId = rahul.id, text = "Send the deck", sourceApp = "com.whatsapp", createdAt = now))
@@ -140,6 +140,55 @@ object Demo {
         values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
         context.contentResolver.update(uri, values, null, null)
         return true
+    }
+
+    /**
+     * Everything the guided demo needs, without touching the user's own data: the demo week (seeded once), and the
+     * Delhi trip turned into a full space (blocks, an expenses split with Riya and a budget). Returns the trip's id.
+     */
+    suspend fun prepareTour(engine: CueEngine): Long? {
+        seed(engine)
+        val dao = engine.dao
+        val trip = dao.itemByHash("demo-ticket")?.albumId?.let { dao.album(it) } ?: return null
+        val spaces = com.cue.agent.Spaces(engine)
+        spaces.ensureBlocks(trip)
+        dao.blocks(trip.id).firstOrNull { it.type == com.cue.domain.BlockType.EXPENSES }?.let { b ->
+            val cfg = JSONObject(b.config)
+            if (!cfg.has("budget")) dao.updateBlock(b.copy(config = cfg.put("budget", 25000).put("people", org.json.JSONArray(listOf("Riya"))).toString()))
+        }
+        // The packing list Cue made from the call belongs on the trip's page.
+        val packing = dao.itemsInAlbum(trip.id).firstOrNull { it.type == ItemType.CHECKLIST && it.title == "To pack" }
+        dao.blocks(trip.id).firstOrNull { it.type == com.cue.domain.BlockType.CHECKLIST }?.let { b ->
+            if (packing != null && JSONObject(b.config).optLong("itemId", 0) != packing.id) {
+                JSONObject(b.config).optLong("itemId", 0).takeIf { it > 0 && it != packing.id }?.let { old -> if (dao.entries(old).isEmpty()) dao.deleteItem(old) }
+                dao.updateBlock(b.copy(title = "To pack", config = JSONObject(b.config).put("itemId", packing.id).toString()))
+            }
+        }
+        return trip.id
+    }
+
+    /** A picture for the demo, drawn on the phone: a receipt when [lines] is given, otherwise a simple scene. */
+    fun drawPicture(context: Context, name: String, lines: List<String>? = null): String {
+        val bmp = Bitmap.createBitmap(900, if (lines != null) 1200 else 700, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
+        if (lines != null) {
+            c.drawColor(Color.WHITE)
+            val p = Paint().apply { color = Color.BLACK; textSize = 46f; isAntiAlias = true; typeface = Typeface.MONOSPACE }
+            val head = Paint(p).apply { textSize = 56f; typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD) }
+            lines.forEachIndexed { i, l -> c.drawText(l, 60f, 110f + i * 82f, if (i == 0) head else p) }
+        } else {
+            // A wedding venue at dusk: sky, marigold strings, a lit stage.
+            c.drawColor(Color.rgb(250, 170, 120))
+            c.drawRect(0f, 420f, 900f, 700f, Paint().apply { color = Color.rgb(120, 40, 60) })
+            val marigold = Paint().apply { color = Color.rgb(255, 190, 40); isAntiAlias = true }
+            for (row in 0..2) for (x in 0..18) c.drawCircle(25f + x * 48f, 60f + row * 70f + (x % 2) * 12f, 16f, marigold)
+            c.drawRect(250f, 300f, 650f, 460f, Paint().apply { color = Color.rgb(255, 235, 200) })
+            c.drawCircle(450f, 380f, 50f, Paint().apply { color = Color.rgb(230, 60, 90); isAntiAlias = true })
+        }
+        val dir = java.io.File(context.filesDir, "media").apply { mkdirs() }
+        val f = java.io.File(dir, "$name-${System.nanoTime()}.jpg")
+        f.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+        return f.absolutePath
     }
 
     suspend fun reset(context: Context) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {

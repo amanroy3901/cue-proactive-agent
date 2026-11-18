@@ -33,7 +33,9 @@ class Inbox(
         val label: String get() = when {
             item == null -> "that"
             item.kind == ItemKind.PHOTO -> "the photo"
-            else -> "the " + item.title.replaceFirstChar { it.lowercase() }.removePrefix("the ")
+            // "the electricity bill", but "the Karim's bill": only common words lose their capital.
+            item.title.substringBefore(' ') in COMMON -> "the " + item.title.replaceFirstChar { it.lowercase() }
+            else -> "the " + item.title.removePrefix("The ")
         }
 
         /** "Saved the Taj bill to Goa trip and added ₹4,200 to its expenses." */
@@ -110,6 +112,8 @@ class Inbox(
     }
 
     companion object {
+        private val COMMON = setOf("Bill", "Electricity", "Hotel", "Prescription", "Lab", "Boarding", "Flight", "Insurance", "Vehicle", "Photo", "Screenshot",
+            "Ticket", "Warranty", "Vehicle", "Water", "Gas", "Phone", "Laptop", "Fridge", "Washing", "Microwave", "Receipt", "Invoice", "Report")
         /** A space needs this score to be filed into without asking. */
         const val SURE = 60
         /** A rival this close makes Cue ask instead. */
