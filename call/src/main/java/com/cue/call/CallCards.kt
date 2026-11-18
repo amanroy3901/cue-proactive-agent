@@ -71,6 +71,7 @@ fun CallCardView(card: CallCard, version: Int, dark: Boolean) {
         CallCard.Albums -> AlbumsCard(version, dark)
         CallCard.Renewals -> RenewalsCard(version, dark)
         CallCard.Focus -> FocusCard(version, dark)
+        is CallCard.Screen -> {} // drawn by the board itself (generated UI)
     }
 }
 

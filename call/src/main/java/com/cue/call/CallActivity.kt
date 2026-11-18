@@ -52,6 +52,7 @@ import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.runtime.LaunchedEffect
@@ -185,6 +186,13 @@ class CallActivity : ComponentActivity() {
     private var updatedAt by mutableStateOf(0)
     private var updateStamp by mutableStateOf(0L)
     private var addedNew by mutableStateOf(false)
+    /** Screens Cue designs for the board (generated UI): their state by card id, and the renderer. */
+    private val screenState = androidx.compose.runtime.mutableStateMapOf<Long, String>()
+    private val boardUi: com.cue.genui.CueGenUi = com.cue.genui.CueGenUi(onAction = { act -> runOnUiThread { boardAction(act.name, act.args) } })
+    private val boardEnv = object : com.cue.genui.CueGenEnv {
+        override val dao get() = CueRuntime.engine.dao
+        override fun open(route: String) { CueRuntime.engine.log("board asked to open $route during a call; ignored") }
+    }
     private var showTranscript by mutableStateOf(false)
     /** What Cue just did ("Ticked off · Charger"), shown briefly under the captions. */
     private val acts = mutableStateListOf<Act>()
@@ -270,6 +278,7 @@ class CallActivity : ComponentActivity() {
         val at = panel.indexOfFirst { sameCard(it, card) }
         if (at >= 0) { panel[at] = card; updatedAt = at; addedNew = false } else { panel += card; updatedAt = panel.lastIndex; panelAt = updatedAt; addedNew = true }
         updateStamp = System.currentTimeMillis()
+        if (card is CallCard.Screen && at < 0) drawScreen(card)
         cardVersion++
         syncActs()
         action = pixelMoodForTool(card::class.simpleName.orEmpty().lowercase())
@@ -277,11 +286,35 @@ class CallActivity : ComponentActivity() {
     }
 
     private fun sameCard(a: CallCard, b: CallCard): Boolean = when {
+        a is CallCard.Screen && b is CallCard.Screen -> a.id == b.id
         a is CallCard.Checklist && b is CallCard.Checklist -> a.itemId == b.itemId
         a is CallCard.Journal && b is CallCard.Journal -> true
         a is CallCard.People && b is CallCard.People -> a.personId == b.personId
         a is CallCard.Found && b is CallCard.Found -> a.itemIds == b.itemIds
         else -> a::class == b::class
+    }
+
+    /** Asks for a generated screen for the board; it shows as a "For you" tab when ready. */
+    private fun drawScreen(card: CallCard.Screen) {
+        screenState[card.id] = "loading"
+        lifecycleScope.launch {
+            val made = runCatching { CueRuntime.drawScreen?.invoke("board-${card.id}", card.request, flow?.albumId) }.getOrNull()
+            if (made == null) { screenState[card.id] = "failed"; return@launch }
+            runCatching { boardUi.feedAll(org.json.JSONArray(made.first), "board-${card.id}") }
+            screenState[card.id] = "ready"
+            updatedAt = panel.indexOfFirst { it is CallCard.Screen && it.id == card.id }.coerceAtLeast(0); addedNew = true
+            updateStamp = System.currentTimeMillis()
+            cardVersion++
+        }
+    }
+
+    /** A button on a board screen: it becomes the user's next words in the call. */
+    private fun boardAction(name: String, args: Map<String, String>) {
+        val text = if (name == "ask") args["text"].orEmpty() else "Please do this: $name ${args.filterValues { it.isNotBlank() }}"
+        if (text.isBlank()) return
+        panelOpen = false
+        addLine("user", text.substringBefore("\n"))
+        sendTyped(text)
     }
 
     /** New things the call changed become ticker entries. */
@@ -745,7 +778,17 @@ class CallActivity : ComponentActivity() {
                     BoardRail(panel.toList(), updatedAt, updateStamp, onOpen = { panelAt = it; panelOpen = true })
                 }
             }
-            BoardDrawer(panelOpen, panel.toList(), panelAt, cardVersion, onSelect = { panelAt = it }, onClose = { panelOpen = false })
+            val boardSurfaces by boardUi.surfaces.collectAsState()
+            BoardDrawer(panelOpen, panel.toList(), panelAt, cardVersion, onSelect = { panelAt = it }, onClose = { panelOpen = false }) { sc ->
+                when (screenState[sc.id]) {
+                    "ready" -> Box(Modifier.padding(4.dp)) { com.cue.genui.GenSurface(boardUi, boardSurfaces, "board-${sc.id}", boardEnv, Modifier.fillMaxWidth(), dark = true) }
+                    "failed" -> Txt("I couldn't draw that one. Ask me again.", Type.body, Stage.dim, modifier = Modifier.padding(16.dp))
+                    else -> Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Txt("Designing it for you…", Type.bodyStrong, Stage.text)
+                        Txt(sc.request, Type.small, Stage.dim, maxLines = 2)
+                    }
+                }
+            }
             if (showTranscript) Transcript()
         }
     }

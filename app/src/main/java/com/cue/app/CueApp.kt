@@ -40,6 +40,8 @@ import kotlinx.coroutines.withContext
  * domain ports, and installs the engine where receivers and services can find it.
  */
 class CueApp : Application() {
+    /** Generated screens (A2UI) for Ask, spaces, Home and calls. */
+    val screens by lazy { ScreenMaker(this) }
     lateinit var engine: CueEngine
         private set
     lateinit var settings: PrefSettings
@@ -72,6 +74,8 @@ class CueApp : Application() {
         )
         CueRuntime.install(engine)
         CueRuntime.ingestFile = { path, source, name -> Ingest.process(this, path, source, name) }
+        // Calls can put a generated screen on their board.
+        CueRuntime.drawScreen = { surfaceId, request, albumId -> screens.makeRaw(surfaceId, request, ScreenMaker.Purpose.CALL, albumId).also { it ?: engine.log("board screen failed: $request") } }
         RingController.ensureChannel(this)
         ScreenshotWatch.start(this)
         CueRuntime.scope.launch { engine.ensureDefaults() }

@@ -17,6 +17,8 @@ object CueRuntime {
     /** Hooks for platform work the JVM modules cannot do themselves. */
     @Volatile var ingestFile: (suspend (path: String, source: String, fileName: String) -> Unit)? = null
     @Volatile var openCall: ((kind: String, reminderId: Long?) -> Unit)? = null
+    /** Draws a generated screen for a call's board: A2UI messages (JSON array text) and Cue's line; null if it can't. */
+    @Volatile var drawScreen: (suspend (surfaceId: String, request: String, albumId: Long?) -> Pair<String, String>?)? = null
 
     fun install(engine: CueEngine) { _engine = engine }
 }

@@ -134,6 +134,39 @@ Results show in the chat as screens Cue composes from its own components. Calls 
   - Cards no longer sit in the conversation. They live on a **board**: a rail of buttons on the right edge (one per card, pulsing when it changes). A note says "List on your board" or "List updated". Tap to slide the board in from the right; it stays live.
   - Stray Greek or Cyrillic in Cue's transcript is filtered out.
 
+## A2UI everywhere, planning as a partner (Nov 18)
+
+- **One screen maker** (`app/ScreenMaker.kt`): one prompt, one data snapshot and the thinking model for every generated screen, with a purpose for each place: CHAT (Ask Cue), SPACE (top of a space's page), HOME (today's brief), CALL (the call board).
+- **Planning partner, not a quiz.** "I'm planning a trip to Goa" gets ONE screen:
+  - an insight on what Cue already knows (free dates, the wedding on 18 Dec, other trips)
+  - "Your brief", pre-filled: from, start/end dates, who, budget slider, vibe
+  - a first-sketch timeline
+  - "Build my plan"
+
+  Building it gives the full plan: insight, day tabs with timed stops, budget bars, a comparison with Cue's pick, and change buttons.
+  - Cue's own native **Save as a space** reads the stops from the plan's timelines. Dates are made exact: "Day 2 9 AM" becomes "12 Dec 9:00 AM".
+  - Offline, or with every model busy, the phone builds the same kind of brief itself (next free weekend, who, what to track) with **Make it**. The old question chips are no longer used for planning online.
+- **Space pages:** a generated "Cue's take" at the top (`GenBlocks.kt`), cached 30 min with a Refresh button. Its buttons run tools, or continue in Ask about that space.
+- **Home:** a generated "Your brief" for the next 48 hours.
+- **Calls:** a new live tool, `board_show`. Cue draws a screen (a plan, a comparison, a budget) as a "For you" tab on the board, dark-themed, in about 5–8 s. On a call it draws the finished plan, never a form. Buttons on it feed back into the conversation.
+- **A professional look.**
+  - Every A2UI part draws through `CueA2uiTheme`: Plus Jakarta at a calm scale, Cue's violet, rounded shapes, text taking its container's colour.
+  - Every generated screen sits on a "Cue · made for you" canvas.
+  - CueProgress stacks when it's narrow.
+- **Making the renderer forgive model slips** (`CueGenUi.feedAll`):
+  - one object holding several messages is split
+  - `version` is put first in each message
+  - bare components are wrapped
+  - Rows with no width shares get equal ones
+  - every input gets a binding and a value (a matching key, or a sensible default), and values are sent before the components that read them
+- **Tested on the emulator:**
+  - brief, build, save (9 stops)
+  - offline brief and Make it
+  - the space page take, the Home brief
+  - the call board plan
+  - agent unit tests pass
+- **Not tested on the razr.** Model availability varied during testing: the thinking model sometimes timed out, and the Flash-Lite fallback answered.
+
 ## Not verified, and why
 
 - **Real speech (partly).** Since the Nov 13 morning fix, calls on LFM3 hear the user's own voice. Verified with speech played from the Mac and with Aman talking on live calls: the model transcribed "Can you add a haircut in the list?" and "Call me at 11pm every day." and both actions ran. "Aadhaar card" was heard as "other arcade" / "adha card", so Indian words can be misheard.

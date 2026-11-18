@@ -184,7 +184,10 @@ object CueProgressComponent : A2uiComponent {
         val frac = (v / m).coerceIn(0f, 1f)
         val anim = remember { Animatable(0f) }
         LaunchedEffect(frac) { anim.animateTo(frac, tween(1000, easing = FastOutSlowInEasing)) }
-        Row(modifier.clip(RoundedCornerShape(22.dp)).background(Color.White).border(1.dp, Cue.line, RoundedCornerShape(22.dp)).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        // Narrow (half a row): the ring above its words; wide: side by side.
+        BoxWithConstraints(modifier.clip(RoundedCornerShape(22.dp)).background(Color.White).border(1.dp, Cue.line, RoundedCornerShape(22.dp)).padding(12.dp)) {
+        val narrow = maxWidth < 190.dp
+        val ring: @Composable () -> Unit = {
             Box(Modifier.size(52.dp), contentAlignment = Alignment.Center) {
                 Canvas(Modifier.fillMaxSize()) {
                     val sw = 6.dp.toPx()
@@ -194,11 +197,15 @@ object CueProgressComponent : A2uiComponent {
                 }
                 Txt("${(frac * 100).toInt()}%", Type.tiny, Cue.ink)
             }
-            Spacer(Modifier.width(10.dp))
+        }
+        val words: @Composable () -> Unit = {
             Column {
-                Txt(properties[label] ?: "", Type.smallStrong, Cue.ink, maxLines = 1)
-                properties[caption]?.takeIf { it.isNotBlank() }?.let { Txt(it, Type.tiny, Cue.muted, maxLines = 2) }
+                Txt(properties[label] ?: "", Type.smallStrong, Cue.ink, maxLines = 2)
+                properties[caption]?.takeIf { it.isNotBlank() }?.let { Txt(it, Type.tiny, Cue.muted, maxLines = 3) }
             }
+        }
+        if (narrow) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { ring(); words() }
+        else Row(verticalAlignment = Alignment.CenterVertically) { ring(); Spacer(Modifier.width(10.dp)); words() }
         }
     }
 }

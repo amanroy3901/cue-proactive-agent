@@ -220,6 +220,11 @@ fun HomeScreen(a: MainActivity, nav: Nav) {
                 Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = Cue.muted)
             }
         }
+        // Today's brief, generated (A2UI) from everything Cue knows.
+        item(key = "brief") {
+            val block = remember { a.genBlock("home", ScreenMaker.Purpose.HOME, null) { "Brief me on today and the next 48 hours: what matters most, what's at risk, and what I should do first." } }
+            GenBlockView(block, "Your brief", "Looking across your day…")
+        }
         if (tripList != null && listEntries.isNotEmpty()) item {
             ChecklistCard(tripList.title, listEntries, header = if (trip != null && ticket != null) ({
                 Row(Modifier.fillMaxWidth().height(58.dp).clip(RoundedCornerShape(22.dp)).clickable { nav.go("album/${trip.id}") }.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {

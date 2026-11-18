@@ -93,6 +93,8 @@ data class AskTurn(
     val preview: SpaceSpec? = null, val openAlbum: Long? = null,
     /** How Cue worked the answer out (short steps), and how long it thought. */
     val thoughts: List<String> = emptyList(), val thinkMs: Long = 0,
+    /** A full plan Cue can save as a space with one tap: its stops (when to what). Null once saved. */
+    val planStops: List<Pair<String, String>> = emptyList(), val planSaved: Boolean = false,
 )
 
 class AskSession(private val a: MainActivity) {
@@ -143,7 +145,9 @@ class AskSession(private val a: MainActivity) {
             val p = plan
             when {
                 p != null && p.index < p.questions.size -> answerPlan(t)
-                PlanTalk.isPlanning(t) -> startPlan(t)
+                // Online, planning is a conversation with a screen (the brief and a first sketch); offline it's the
+                // quick questions.
+                PlanTalk.isPlanning(t) && !a.cue.gemini.configured -> localBrief(t)
                 else -> answer()
             }
         }
@@ -556,35 +560,28 @@ class AskSession(private val a: MainActivity) {
     private suspend fun answer(fallback: (suspend () -> Unit)? = null) {
         thinking = true
         val surfaceId = "s${++count}"
-        val started = System.currentTimeMillis()
-        val reply = runCatching { withContext(Dispatchers.IO) { callModel(surfaceId) } }.onFailure { Log.w("CueAsk", "model", it) }.getOrNull()
-        val tookMs = System.currentTimeMillis() - started
-        val json = reply?.let { runCatching { JSONObject(it.removePrefix("```json").removeSuffix("```").trim()) }.getOrNull() }
-        if (json == null && fallback != null) { thinking = false; fallback(); return }
-        if (json == null) {
-            // Offline, no key, or a reply that isn't JSON: answer from the phone with a fixed screen.
-            val local = LocalScreens.forQuestion(turns.last { it.fromUser }.text, a.cue.engine.dao)
+        val question = turns.last { it.fromUser }.text
+        val made = runCatching { a.screens.make(genUi, surfaceId, question, ScreenMaker.Purpose.CHAT, history().dropLast(1), contextAlbum) }
+            .onFailure { Log.w("CueAsk", "model", it) }.getOrNull()
+        if (made == null && fallback != null) { thinking = false; fallback(); return }
+        if (made == null) {
+            // Offline, no key, or a reply that isn't JSON: planning goes through the quick questions; anything
+            // else gets a fixed screen from the phone.
+            thinking = false
+            if (PlanTalk.isPlanning(question)) { localBrief(question); return }
+            val local = LocalScreens.forQuestion(question, a.cue.engine.dao)
             genUi.feedAll(local.second, surfaceId)
             turns += AskTurn(false, local.first, surfaceId)
-            thinking = false
             save()
             return
         }
-        // Changes the user plainly asked for run now, through the same tools a call uses.
-        val ran = mutableListOf<String>()
-        json.optJSONArray("tools")?.let { arr ->
-            for (i in 0 until arr.length()) {
-                val t = arr.optJSONObject(i) ?: continue
-                val args = t.optJSONObject("args")?.let { o -> o.keys().asSequence().associateWith { k -> o.opt(k)?.toString().orEmpty() } }.orEmpty()
-                val r = a.tool(t.optString("name"), args)
-                ran += (if (r.ok) "✓ " else "✗ ") + r.message
-            }
+        // Changes the user plainly asked for run now, through the same tools a call uses. A plan is saved from its
+        // own Save button, never straight from the model.
+        val ran = made.tools.filter { it.first != "space_create" || made.stops.isEmpty() }.map { (name, args) ->
+            a.tool(name, args).let { r -> if (r.message.startsWith("CONFIRM")) r.message.substringAfter("ASK:").substringBefore(" Call ").trim() else (if (r.ok) "✓ " else "✗ ") + r.message }
         }
-        val ui = json.optJSONArray("ui")
-        if (ui != null && ui.length() > 0) runCatching { genUi.feedAll(ui, surfaceId) }.onFailure { Log.w("CueAsk", "feed", it) }
-        val thoughts = json.optJSONArray("thinking")?.let { arr -> (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotBlank() }.take(6) }.orEmpty()
-        turns += AskTurn(false, json.optString("say").ifBlank { if (ran.isNotEmpty()) "Done." else "Here you go." }, if (ui != null && ui.length() > 0) surfaceId else null,
-            thoughts = thoughts, thinkMs = tookMs)
+        turns += AskTurn(false, made.say.ifBlank { if (ran.isNotEmpty()) "Done." else "Here you go." }, if (made.hasUi) surfaceId else null,
+            thoughts = made.thoughts, thinkMs = made.ms, planStops = made.stops)
         ran.forEach { turns += AskTurn(false, it, note = true) }
         thinking = false
         save()
@@ -593,11 +590,20 @@ class AskSession(private val a: MainActivity) {
     /** A button on a generated screen. "ask" sends a follow-up; anything else is one of Cue's tools. */
     private suspend fun onAction(action: GenAction) {
         when (action.name) {
-            "ask" -> ask(action.args["text"].orEmpty())
+            // A follow-up; anything else the button carried (a filled-in brief) goes along with it.
+            "ask" -> {
+                val extra = action.args.filterKeys { it != "text" }.filterValues { it.isNotBlank() && it != "null" }
+                ask(action.args["text"].orEmpty() + if (extra.isEmpty()) "" else "\n" + extra.entries.joinToString("\n") { (k, v) -> "$k: ${v.trim('[', ']').replace("\"", "")}" })
+            }
+            // Saving a plan from its screen: the space, its stops and packing in one go (a tap is the yes).
+            "plan_save", "space_create" -> savePlan(action.args)
+            "plan_local" -> makeLocal(action.args)
             "open" -> a.openRoute(action.args["route"].orEmpty())
             else -> {
                 val args = action.args.filterValues { it.isNotBlank() }
-                val r = a.tool(action.name, args)
+                var r = a.tool(action.name, args)
+                // Tapping the button was the user's yes.
+                if (!r.ok && r.message.startsWith("CONFIRM")) r = a.tool(action.name, args + ("confirm" to "yes"))
                 turns += AskTurn(false, (if (r.ok) "✓ " else "") + r.message.replaceFirstChar { it.uppercase() }, note = true)
             }
         }
@@ -608,117 +614,145 @@ class AskSession(private val a: MainActivity) {
         // Only screens a turn shows can be repaired; an envelope error has no surface of its own.
         if (turns.none { it.surfaceId == surfaceId }) return
         if (!repairs.add(surfaceId) || a.cue.gemini.configured.not()) return
-        val reply = withContext(Dispatchers.IO) {
-            a.cue.gemini.chatJson(systemPrompt(surfaceId), history() + ("user" to "The screen $surfaceId failed to render: $error. Send the whole screen again as corrected ui messages for surface $surfaceId."))
-        } ?: return
-        val ui = runCatching { JSONObject(reply).optJSONArray("ui") }.getOrNull() ?: return
-        genUi.feed(JSONObject().put("version", "v0.9").put("deleteSurface", JSONObject().put("surfaceId", surfaceId)).toString())
-        genUi.feedAll(ui, surfaceId)
+        a.screens.repair(genUi, surfaceId, error, ScreenMaker.Purpose.CHAT, history())
+    }
+
+    /**
+     * A plan's "Day 2 9:00 AM", "Sat 12 Dec 1 PM" or "Fri 4 11 AM" as an exact "12 Dec 9:00 AM", so the time parser
+     * never mistakes a day number for the hour. Day N counts from [start]; a weekday is the first one on or after it.
+     */
+    private fun exactWhen(raw: String, start: java.time.LocalDate?): String {
+        val time = Regex("(?i)\\b(\\d{1,2})(:\\d{2})?\\s*(am|pm)\\b").find(raw)?.value
+            ?: Regex("\\b(\\d{1,2}):(\\d{2})\\b").find(raw)?.value ?: "10 AM"
+        val rest = raw.replace(time, " ")
+        val months = listOf("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+        val base = start ?: java.time.LocalDate.now()
+        val date = Regex("(?i)\\bday\\s*(\\d{1,2})\\b").find(rest)?.let { base.plusDays(it.groupValues[1].toLong() - 1) }
+            ?: Regex("(?i)\\b(\\d{1,2})\\s*(${months.joinToString("|")})[a-z]*").find(rest)?.let { m -> runCatching { java.time.LocalDate.of(base.year, months.indexOf(m.groupValues[2].lowercase()) + 1, m.groupValues[1].toInt()) }.getOrNull() }
+            ?: Regex("(?i)\\b(${months.joinToString("|")})[a-z]*\\s*(\\d{1,2})\\b").find(rest)?.let { m -> runCatching { java.time.LocalDate.of(base.year, months.indexOf(m.groupValues[1].lowercase()) + 1, m.groupValues[2].toInt()) }.getOrNull() }
+            ?: Regex("(?i)\\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*").find(rest)?.let { m ->
+                val dow = listOf("mon", "tue", "wed", "thu", "fri", "sat", "sun").indexOf(m.groupValues[1].lowercase()) + 1
+                (0..6L).map { base.plusDays(it) }.first { it.dayOfWeek.value == dow }
+            } ?: base
+        return "${date.dayOfMonth} ${date.month.getDisplayName(java.time.format.TextStyle.SHORT, Locale.ENGLISH)} ${time.uppercase()}"
+    }
+
+    /**
+     * Planning without the model (offline, or every model busy): still one screen, not a quiz. What Cue already knows,
+     * a brief with smart defaults (the next free weekend, who, what to track), and Make it.
+     */
+    private suspend fun localBrief(goal: String) {
+        val engine = a.cue.engine
+        val base = Spaces(engine).fromTemplate(goal)
+        val today = java.time.LocalDate.now()
+        val albums = withContext(Dispatchers.IO) { engine.dao.albums() }
+        val busy = albums.mapNotNull { al -> al.startAt?.let { s -> TextKit.local(s, zone).toLocalDate() to TextKit.local(al.endAt ?: s, zone).toLocalDate() } }
+        // The first weekend from next week on that doesn't overlap another space.
+        var sat = today.plusDays(((6 - today.dayOfWeek.value + 7) % 7).toLong() + 7)
+        while (busy.any { (s, e) -> !sat.plusDays(1).isBefore(s) && !sat.isAfter(e) }) sat = sat.plusWeeks(1)
+        val start = base.start ?: sat
+        val end = base.end ?: start.plusDays(1)
+        val soon = albums.filter { al -> al.startAt?.let { it > System.currentTimeMillis() && it - System.currentTimeMillis() < 45L * 86_400_000 } == true }.take(2)
+        val pre = PlanTalk.needsIn(base)
+        val id = "t${++count}"
+        val comps = JSONArray()
+        comps.put(c("root", "Column", "children" to JSONArray(listOf("ins", "card", "go"))))
+        comps.put(c("ins", "CueInsight", "tone" to "idea", "title" to "${base.title}: a first sketch",
+            "body" to "I picked dates that don't clash with what you already have. Change anything, then make it.",
+            "points" to JSONArray(listOfNotNull("Free from ${start.format(DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH))}") + soon.map { "Also coming up: ${it.title}" })))
+        comps.put(c("card", "Card", "child" to "form"))
+        comps.put(c("form", "Column", "children" to JSONArray(listOf("h", "dates", "who", "track"))))
+        comps.put(c("h", "Text", "variant" to "h4", "text" to "Your brief"))
+        comps.put(c("dates", "Row", "children" to JSONArray(listOf("start", "end"))))
+        comps.put(c("start", "DateTimeInput", "label" to "Start", "enableDate" to true, "enableTime" to false, "value" to JSONObject().put("path", "/form/start")))
+        comps.put(c("end", "DateTimeInput", "label" to "End", "enableDate" to true, "enableTime" to false, "value" to JSONObject().put("path", "/form/end")))
+        comps.put(c("who", "ChoicePicker", "label" to "Who's in it", "variant" to "mutuallyExclusive", "displayStyle" to "chips",
+            "options" to JSONArray(listOf("Just me", "Partner", "Family", "Friends").map { JSONObject().put("label", it).put("value", it) }), "value" to JSONObject().put("path", "/form/who")))
+        comps.put(c("track", "ChoicePicker", "label" to "Keep track of", "variant" to "multipleSelection", "displayStyle" to "chips",
+            "options" to JSONArray(PlanTalk.trackQuestion(base).options.map { JSONObject().put("label", it).put("value", it) }), "value" to JSONObject().put("path", "/form/track")))
+        comps.put(c("go", "Button", "variant" to "primary", "child" to "got", "action" to JSONObject().put("event", JSONObject().put("name", "plan_local").put("context", JSONObject()
+            .put("goal", goal).put("start", JSONObject().put("path", "/form/start")).put("end", JSONObject().put("path", "/form/end"))
+            .put("who", JSONObject().put("path", "/form/who")).put("track", JSONObject().put("path", "/form/track"))))))
+        comps.put(c("got", "Text", "text" to "Make it"))
+        val data = JSONObject().put("start", start.toString()).put("end", end.toString()).put("who", JSONArray().put("Just me")).put("track", JSONArray(pre))
+        genUi.feedAll(JSONArray().put(JSONObject().put("updateDataModel", JSONObject().put("path", "/form").put("value", data)))
+            .put(JSONObject().put("updateComponents", JSONObject().put("components", comps))), id)
+        turns += AskTurn(false, "Here's a first sketch. Adjust the brief and tap Make it.", id)
+        save()
+    }
+
+    /** "Make it" on the phone-made brief: the space with the picked dates, people and parts, in one go. */
+    private suspend fun makeLocal(args: Map<String, String>) {
+        thinking = true
+        val engine = a.cue.engine
+        fun list(v: String?) = v.orEmpty().trim('[', ']').split(",").map { it.trim().trim('"') }.filter { it.isNotBlank() }
+        val who = list(args["who"]).firstOrNull()?.takeIf { it != "Just me" }.orEmpty()
+        val spec = PlanTalk.applyNeeds(Spaces(engine).fromTemplate(args["goal"].orEmpty(), "", args["start"].orEmpty().take(10), args["end"].orEmpty().take(10), who), list(args["track"]).ifEmpty { null })
+        val id = withContext(Dispatchers.IO) { Spaces(engine).create(spec) }
+        contextAlbum = id
+        thinking = false
+        screen("Made ${spec.title}: ${spec.describe()}.", c("root", "Column", "children" to JSONArray(listOf("space"))), c("space", "CueSpace", "spaceId" to id))
+        turns.lastOrNull()?.let { turns[turns.lastIndex] = it.copy(openAlbum = id) }
+        save()
+    }
+
+    /** Cue's own Save button under a full plan: the goal, dates and budget from the conversation, stops from the plan. */
+    fun savePlanAt(turnIndex: Int) {
+        val t = turns.getOrNull(turnIndex) ?: return
+        if (t.planStops.isEmpty() || t.planSaved || thinking) return
+        turns[turnIndex] = t.copy(planSaved = true)
+        val users = turns.take(turnIndex).filter { it.fromUser }.map { it.text }
+        val goal = users.lastOrNull { PlanTalk.isPlanning(it) } ?: users.firstOrNull().orEmpty()
+        val said = users.takeLast(3).joinToString("\n")
+        val dates = Regex("\\d{4}-\\d{2}-\\d{2}").findAll(said).map { it.value }.toList()
+        val budget = Regex("(?i)budget\\w*:\\s*([\\d.]+)").find(said)?.groupValues?.get(1)?.substringBefore('.')
+        val who = Regex("(?i)(who\\w*|people\\w*):\\s*(.+)").find(said)?.groupValues?.get(2)?.replace(Regex("[\\[\\]\"]"), "")?.takeIf { w -> w.split(",").none { it.trim().lowercase() in setOf("solo", "just me") } }.orEmpty()
+        scope.launch {
+            savePlan(mapOf("goal" to goal, "start" to dates.getOrElse(0) { "" }, "end" to dates.getOrElse(1) { "" }, "budget" to (budget ?: ""), "with" to who,
+                "stops" to t.planStops.joinToString(" | ") { (w, x) -> "$w ~ $x" }))
+        }
+    }
+
+    /**
+     * "Save as a space" on a finished plan: the space, its itinerary stops, its packing list and budget, made in one
+     * go from what the plan screen carried.
+     */
+    private suspend fun savePlan(args: Map<String, String>) {
+        thinking = true
+        val engine = a.cue.engine
+        var name = args["name"].orEmpty()
+        val budget = args["budget"]?.filter { it.isDigit() }?.takeIf { it.isNotBlank() }
+        val goal = args["goal"].orEmpty().ifBlank { name.ifBlank { "My plan" } } + (budget?.let { ", budget ₹$it" } ?: "")
+        val id = withContext(Dispatchers.IO) {
+            val existing = engine.dao.albums().firstOrNull { it.title.equals(name, true) }
+            existing?.takeIf { name.isNotBlank() }?.id ?: Spaces(engine).let { sp -> sp.create(sp.fromTemplate(goal, name, args["start"].orEmpty(), args["end"].orEmpty(), args["with"].orEmpty(), "itinerary, expenses, checklist:Packing")) }
+        }
+        name = withContext(Dispatchers.IO) { engine.dao.album(id)?.title } ?: name
+        contextAlbum = id
+        var stops = 0
+        val start = runCatching { java.time.LocalDate.parse(args["start"].orEmpty()) }.getOrNull()
+            ?: withContext(Dispatchers.IO) { engine.dao.album(id)?.startAt }?.let { TextKit.local(it, zone).toLocalDate() }
+        args["stops"].orEmpty().split("|").map { it.trim() }.filter { it.contains("~") }.forEach { st ->
+            val (whenAt, what) = st.split("~", limit = 2).map { it.trim() }
+            if (a.tool("itinerary_add", mapOf("what" to what, "when" to exactWhen(whenAt, start), "space" to name)).ok) stops++
+        }
+        val packing = args["packing"].orEmpty().split(",").map { it.trim() }.filter { it.isNotBlank() }
+        if (packing.isNotEmpty()) a.tool("checklist_add", mapOf("entries" to packing.joinToString(", "), "list" to "Packing"))
+        val list = withContext(Dispatchers.IO) { engine.dao.checklistsInAlbum(id).firstOrNull() }
+        thinking = false
+        screen("Saved: $name, with $stops stops on the itinerary${if (packing.isNotEmpty()) " and a packing list" else ""}. Send me tickets or bookings for it any time.",
+            c("root", "Column", "children" to JSONArray(listOfNotNull("space", list?.let { "list" }))),
+            c("space", "CueSpace", "spaceId" to id),
+            *listOfNotNull(list?.let { c("list", "CueList", "listId" to it.id, "showDone" to false) }).toTypedArray())
+        turns.lastOrNull()?.let { turns[turns.lastIndex] = it.copy(openAlbum = id) }
+        save()
     }
 
     private fun history(): List<Pair<String, String>> = turns.filter { !it.note }.takeLast(12).map { t ->
         (if (t.fromUser) "user" else "model") to t.text.ifBlank { t.filed.joinToString(" ") { it.message() } }.ifBlank { if (t.files.isNotEmpty()) "(sent ${t.files.size} file${if (t.files.size == 1) "" else "s"})" else "…" }
     }
 
-    private suspend fun callModel(surfaceId: String): String? {
-        if (!a.cue.gemini.configured) return null
-        val sys = systemPrompt(surfaceId)
-        val convo = history().dropLast(1) + ("user" to (snapshot() + "\n\nQUESTION: " + turns.last { it.fromUser }.text))
-        if ((a.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0)
-            runCatching { java.io.File(a.filesDir, "last_ask_prompt.txt").writeText(sys + "\n\n=====\n" + convo.joinToString("\n---\n") { it.first + ": " + it.second }) }
-        val r = a.cue.gemini.thinkJson(sys, convo)
-        r?.let { Log.i("CueAsk", "answered by ${it.second}") }
-        return r?.first
-    }
 
-    private fun systemPrompt(surfaceId: String): String = """
-        You are Cue, the user's personal chief of staff on their phone. You know their lists, spaces (trips, events, health), reminders, habits, papers, people and money from the DATA below.
-        The user is TYPING. Don't just look things up: THINK like a sharp assistant who knows their whole life.
-        1. What do they really need? (Read between the lines: "am I ready for Sunday" means flight + packing + cab + money + anything clashing.)
-        2. Connect the dots across their data: dates that clash, things still open, money vs budget, people waiting on them, habits slipping, a paper that expires.
-        3. Find what they didn't ask but should know: the risk, the clash, the next step, the pattern. Be specific, with their real names, numbers and times.
-        4. Recommend. Have an opinion. Offer the 1-3 next actions as buttons.
-        Never invent data that isn't below. If something important is unknown (weather, traffic), say so briefly or suggest checking it.
-
-        Reply with ONE JSON object, nothing else:
-        {"thinking": ["3-5 short steps, how you worked it out, citing their data by name (never the #numbers), e.g. 'Flight Sun 6 PM; passport still unpacked'"],
-         "say": "1-3 sentences: the answer and your recommendation, warm and direct",
-         "tools": [ {"name": "...", "args": {...}} ],
-         "ui": [ A2UI messages ]}
-
-        TOOLS: put a tool in "tools" only when the user clearly asked you to change something now (add, tick, set, move, delete). Otherwise leave it empty and offer the change as a button.
-        Tool list (args are strings):
-        ${toolList()}
-
-        UI: almost every answer gets a screen. "ui" is a list of A2UI v0.9 messages for surface "$surfaceId":
-        1. {"version":"v0.9","createSurface":{"surfaceId":"$surfaceId","catalogId":"${CueCatalog.ID}"}}
-        2. {"version":"v0.9","updateComponents":{"surfaceId":"$surfaceId","components":[ ...flat list, one component must have "id":"root"... ]}}
-        3. optional {"version":"v0.9","updateDataModel":{"surfaceId":"$surfaceId","path":"/form","value":{...}}} to pre-fill form fields.
-        Each component is {"id":"...","component":"<Name>", ...its properties}. Children are referenced by id ("child":"id" or "children":["a","b"]).
-        Compose a real screen, 4 to 14 components, root a Column, in this order:
-          - Lead with a CueInsight: your conclusion and its reasons (tone risk / heads_up / good / idea).
-          - Then the evidence, live: CueList, CueReminders, CueHabit, CuePaper, CuePerson, CueSpace (they draw the user's real data by its number).
-          - Then the thinking made visual when it fits: CueTimeline for a plan or a day, CueBars for money or comparisons, CueProgress in a Row for how far along, CueCompare for a decision, CueStat tiles in a Row for key numbers.
-          - End with 1-3 Buttons for the next actions.
-        Never copy private details (PNR, seat, amounts on papers, medicine doses, lab values) into Text; show the paper with CuePaper and it fills them in itself.
-        A Button needs a child Text: {"id":"b1","component":"Button","child":"b1t","action":{"event":{"name":"<tool name>","context":{...tool args...}}}}.
-        Context values can read form fields: {"path":"/form/text"}. Bind a TextField with "value":{"path":"/form/text"}.
-        A button with event name "ask" and context {"text":"..."} asks you that follow-up.
-        Only for small talk, send a single Text root or leave "ui" empty.
-
-        CATALOG (every component you may use, with its properties):
-        ${genUi.compactSchema}
-    """.trimIndent()
-
-    private fun toolList(): String = CueTools.live.filter { it.name != "end_call" }.joinToString("\n") { t ->
-        "- ${t.name}(${t.parameters.joinToString(", ") { p -> p.name + if (p.required) "" else "?" }}): ${t.description}"
-    }
-
-    /** What the model may know: names and numbers, not the private fields inside papers. */
-    private suspend fun snapshot(): String = withContext(Dispatchers.IO) {
-        val dao = a.cue.engine.dao
-        val now = System.currentTimeMillis()
-        val sb = StringBuilder()
-        sb.append("NOW: ").append(java.time.ZonedDateTime.now(zone).format(DateTimeFormatter.ofPattern("EEEE d MMM yyyy, h:mm a", Locale.ENGLISH))).append('\n')
-        sb.append("USER: ").append(a.cue.settings.userName).append('\n')
-        contextAlbum?.let { id -> dao.album(id)?.let { sb.append("THIS CONVERSATION IS ABOUT: space #${it.id} ${it.title}\n") } }
-        val albums = dao.albums()
-        fun space(id: Long?) = id?.let { i -> albums.firstOrNull { it.id == i }?.let { " [space #${it.id}]" } }.orEmpty()
-        val entries = dao.openEntries()
-        sb.append("LISTS:\n"); dao.itemsOfType(ItemType.CHECKLIST).take(12).forEach { l ->
-            val es = dao.entries(l.id); sb.append("  #${l.id} ${l.title}${space(l.albumId)}: ${es.count { !it.checked }} open, ${es.count { it.checked }} done; open: ${es.filter { !it.checked }.take(6).joinToString { it.text }}\n")
-        }
-        if (entries.isEmpty()) sb.append("  (no open items)\n")
-        val today = java.time.LocalDate.now()
-        sb.append("HABITS:\n"); dao.habits().forEach { h ->
-            val logs = dao.habitLogs(h.id); sb.append("  #${h.id} ${h.name}: ${HabitDays.streak(h, logs, today, zone)}-day streak, done today: ${logs.any { it.day == today.toString() && it.done }}\n")
-        }
-        sb.append("REMINDERS (next):\n"); dao.scheduledReminders().filter { it.kind !in setOf(ReminderKind.PRELOAD, ReminderKind.AIRPORT_BACKUP) }.take(10).forEach { r ->
-            sb.append("  #${r.id} ${TextKit.dayLabel(r.fireAt, now, zone)} ${TextKit.clock(r.fireAt, zone)}: ${r.text}${if (r.surface == Surface.RING) " (rings)" else ""}\n")
-        }
-        sb.append("PAPERS:\n"); dao.itemsOfType(ItemType.GALLERY).take(15).forEach { d -> sb.append("  #${d.id} ${d.kind}: ${d.title}${space(d.albumId)}${d.expiresAt?.let { ", ends " + TextKit.dateLabel(it, zone) } ?: ""}${d.eventStart?.let { ", on " + TextKit.dateLabel(it, zone) } ?: ""}\n") }
-        sb.append("NOTES:\n"); dao.itemsOfType(ItemType.NOTE).filter { it.kind != "practice" }.take(10).forEach { n -> sb.append("  #${n.id} ${n.title.take(50)}${space(n.albumId)}\n") }
-        sb.append("JOURNAL:\n"); dao.itemsOfType(ItemType.JOURNAL).take(5).forEach { j -> sb.append("  #${j.id} ${TextKit.dateLabel(j.eventStart ?: j.createdAt, zone)}\n") }
-        val pending = dao.allOpenPending()
-        sb.append("PEOPLE:\n"); pending.groupBy { it.personId }.forEach { (pid, ps) -> sb.append("  #$pid ${dao.person(pid)?.name}: ${ps.size} pending (${ps.take(3).joinToString { it.text }})\n") }
-        sb.append("SPACES:\n"); albums.take(10).forEach { al ->
-            sb.append("  #${al.id} ${al.title} (${al.kind.lowercase()}${al.startAt?.let { ", " + TextKit.dateLabel(it, zone) + " " + TextKit.clock(it, zone) } ?: ""}${al.endAt?.let { " to " + TextKit.dateLabel(it, zone) } ?: ""})\n")
-            val bs = dao.blocks(al.id)
-            val recs = bs.flatMap { dao.records(it.id) }
-            val es = dao.itemsInAlbum(al.id).filter { it.type == ItemType.CHECKLIST }.flatMap { dao.entries(it.id) }
-            Spaces.summary(al, bs, recs, es, now, zone).takeIf { it.isNotBlank() }?.let { sb.append("    status: $it\n") }
-            bs.firstOrNull { it.type == BlockType.EXPENSES }?.let { b ->
-                val ex = Spaces.expenses(dao.records(b.id))
-                if (ex.isNotEmpty() || Spaces.budget(b) != null) {
-                    sb.append("    money: spent ₹${Spaces.money(ex.sumOf { it.amount })}${Spaces.budget(b)?.let { " of ₹" + Spaces.money(it) + " budget" } ?: ""}; ")
-                    sb.append(ex.take(8).joinToString { "${it.what} ₹${Spaces.money(it.amount)}${if (it.paidBy.isNotBlank()) " (paid by ${it.paidBy})" else ""}" }).append('\n')
-                    Spaces.settle(ex, Spaces.people(b)).firstOrNull()?.let { sb.append("    split: $it\n") }
-                }
-            }
-        }
-        dao.facts().filter { it.confirmed }.take(12).takeIf { it.isNotEmpty() }?.let { fs -> sb.append("ABOUT THE USER:\n"); fs.forEach { sb.append("  - ${it.text}\n") } }
-        sb.toString()
-    }
 }
 
 /** Fixed A2UI screens built on the phone, for when there's no model: the template half of generated UI. */
@@ -833,6 +867,13 @@ fun AskScreen(a: MainActivity, nav: Nav) {
                             t.preview?.let { spec -> PlanPreview(spec, { b -> session.dropBlock(idx, b) }, { session.makeSpace(idx) }, { session.cancelPlan(idx) }) }
                             t.openAlbum?.let { id -> Box(Modifier.padding(start = 44.dp)) { ChoiceChip("Open ${spaces.firstOrNull { it.id == id }?.title ?: "space"}", selected = true) { nav.go("album/$id") } } }
                             t.surfaceId?.let { id -> GenSurface(session.genUi, surfaces, id, session.env, Modifier.fillMaxWidth()) }
+                            if (t.planStops.isNotEmpty()) {
+                                if (t.planSaved) Txt("Saved as a space.", Type.small, Cue.muted, modifier = Modifier.padding(start = 8.dp))
+                                else Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    PrimaryButton("Save as a space", Modifier.fillMaxWidth(), icon = Icons.Rounded.AutoAwesome, height = 54.dp) { session.savePlanAt(idx) }
+                                    Txt("Adds the ${t.planStops.size} stops to its itinerary, with a packing list and the budget.", Type.small, Cue.muted, modifier = Modifier.padding(horizontal = 8.dp))
+                                }
+                            }
                         }
                     }
                 }
